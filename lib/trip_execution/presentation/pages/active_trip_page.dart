@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +13,8 @@ import '../../../core/widgets/app_button.dart';
 import '../../../stakeholder/application/students_repository.dart';
 import '../../../stakeholder/domain/model/route_student.dart';
 import '../../application/agenda_provider.dart';
+import '../../application/tracking_controller.dart';
+import '../../application/tracking_engine.dart';
 import '../../application/trip_controller.dart';
 import '../../domain/model/trip_live.dart';
 import '../../domain/model/trip_models.dart';
@@ -205,6 +209,11 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
     final elapsed = started == null ? 0 : DateTime.now().difference(started).inMinutes;
     final next = live.nextStop;
     final map = ref.watch(tripMapBuilderProvider);
+    // La ubicación se comparte solo mientras el viaje está en curso: al dejar
+    // de observarse, el provider se libera y el GPS se detiene.
+    final tracking = live.isActive
+        ? ref.watch(trackingControllerProvider(live.tripId))
+        : const TrackingState(status: TrackingStatus.stopped);
 
     return PopScope(
       canPop: false,
@@ -230,7 +239,7 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
                     left: 18,
                     right: 18,
                     top: 16,
-                    child: _SharingPill(seconds: live.position?.ageSeconds),
+                    child: _SharingPill(tracking: tracking, serverAgeSeconds: live.position?.ageSeconds),
                   ),
                   Align(
                     alignment: Alignment.bottomCenter,
@@ -362,12 +371,79 @@ class _Header extends StatelessWidget {
   }
 }
 
-class _SharingPill extends StatelessWidget {
-  const _SharingPill({required this.seconds});
-  final int? seconds;
+class _SharingPill extends StatefulWidget {
+  const _SharingPill({required this.tracking, this.serverAgeSeconds});
+
+  final TrackingState tracking;
+
+  /// `position.ageSeconds` de `/live`, mientras no haya un envío local.
+  final int? serverAgeSeconds;
+
+  @override
+  State<_SharingPill> createState() => _SharingPillState();
+}
+
+class _SharingPillState extends State<_SharingPill> {
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    // Refresca el "hace N s" cada segundo.
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  ({String title, String detail, Color color}) get _view {
+    final t = widget.tracking;
+    switch (t.status) {
+      case TrackingStatus.noPermission:
+        return (
+          title: 'Ubicación sin permiso',
+          detail: 'Actívalo en ajustes',
+          color: AppColors.danger,
+        );
+      case TrackingStatus.serviceOff:
+        return (
+          title: 'GPS desactivado',
+          detail: 'Actívalo en ajustes',
+          color: AppColors.danger,
+        );
+      case TrackingStatus.stopped:
+        return (title: 'Ubicación detenida', detail: '', color: AppColors.textSecondary);
+      case TrackingStatus.starting:
+      case TrackingStatus.active:
+        break;
+    }
+    final sent = t.lastSentAt;
+    final age = sent != null
+        ? DateTime.now().difference(sent).inSeconds
+        : widget.serverAgeSeconds;
+    final stale = t.pending > 0 && (age == null || age > 30);
+    final detail = stale
+        ? 'sin señal, ${t.pending} guardadas'
+        : switch (age) {
+            null => 'esperando GPS',
+            <= 1 => 'ahora',
+            final s => 'hace $s s',
+          };
+    return (
+      title: 'Compartiendo ubicación',
+      detail: detail,
+      color: stale ? AppColors.warning : AppColors.success,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final v = _view;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
@@ -379,12 +455,12 @@ class _SharingPill extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(Icons.location_on_outlined, color: AppColors.success, size: 22),
+          Icon(Icons.location_on_outlined, color: v.color, size: 22),
           const SizedBox(width: 10),
-          const Expanded(
+          Expanded(
             child: Text(
-              'Compartiendo ubicación',
-              style: TextStyle(
+              v.title,
+              style: const TextStyle(
                 fontFamily: AppText.body,
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
@@ -392,14 +468,7 @@ class _SharingPill extends StatelessWidget {
               ),
             ),
           ),
-          Text(
-            switch (seconds) {
-              null => 'esperando GPS',
-              <= 1 => 'ahora',
-              final s => 'hace $s s',
-            },
-            style: AppText.caption.copyWith(fontSize: 15),
-          ),
+          Text(v.detail, style: AppText.caption.copyWith(fontSize: 15)),
         ],
       ),
     );

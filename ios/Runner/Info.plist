@@ -66,6 +66,10 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>RutaSegura usa tu ubicación para verificar el GPS antes de salir y para compartir el recorrido con las familias mientras un viaje está en curso.</string>
 	<key>NSAppTransportSecurity</key>

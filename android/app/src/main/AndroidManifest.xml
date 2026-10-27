@@ -4,6 +4,12 @@
     <!-- Checklist "Antes de salir" y, en la etapa 5, el GPS del viaje. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- GPS del viaje con la pantalla apagada: servicio en primer plano de tipo ubicación. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- Android 13+: mostrar la notificación fija del servicio. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
         android:label="rutasegura"
         android:name="${applicationName}"

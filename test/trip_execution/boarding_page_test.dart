@@ -2,15 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rutasegura/core/network/api_error.dart';
+import 'package:rutasegura/trip_execution/application/tracking_engine.dart';
 import 'package:rutasegura/trip_execution/presentation/pages/active_trip_page.dart';
 import 'package:rutasegura/trip_execution/presentation/pages/boarding_page.dart';
 
 import '../support/fakes.dart';
 
-Future<void> _pump(WidgetTester tester, Widget page, FakeTripApi api) async {
+Future<void> _pump(
+  WidgetTester tester,
+  Widget page,
+  FakeTripApi api, {
+  FakePositionSource? gps,
+}) async {
   await tester.pumpWidget(
     ProviderScope(
-      overrides: fakeBackend(trips: api),
+      overrides: fakeBackend(trips: api, gps: gps),
       child: MaterialApp(home: page),
     ),
   );
@@ -68,6 +74,27 @@ void main() {
 
     expect(find.text('Faltan registrar 2 alumnos.'), findsOneWidget);
     expect(find.text('¿Finalizar el viaje?'), findsNothing);
+  });
+
+  testWidgets('viaje en curso: comparte la ubicación y la detiene al salir', (tester) async {
+    final gps = FakePositionSource();
+    await _pump(tester, ActiveTripPage(trip: trip), FakeTripApi(), gps: gps);
+
+    expect(gps.hasListener, isTrue);
+    expect(find.text('Compartiendo ubicación'), findsOneWidget);
+    expect(find.text('esperando GPS'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    expect(gps.hasListener, isFalse);
+  });
+
+  testWidgets('sin permiso de ubicación se avisa en la pantalla', (tester) async {
+    final gps = FakePositionSource(permission: TrackingPermission.denied);
+    await _pump(tester, ActiveTripPage(trip: trip), FakeTripApi(), gps: gps);
+
+    expect(find.text('Ubicación sin permiso'), findsOneWidget);
+    expect(gps.hasListener, isFalse);
   });
 
   testWidgets('si el inicio falla se ofrece reintentar', (tester) async {

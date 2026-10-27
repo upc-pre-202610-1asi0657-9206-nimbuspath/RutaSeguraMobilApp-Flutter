@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/network/api_client.dart';
+import '../domain/model/tracking.dart';
 import '../domain/model/trip_live.dart';
 import '../domain/model/trip_models.dart';
 
@@ -36,7 +37,12 @@ abstract interface class TripApi {
     required String studentId,
     required String clientEventId,
   });
+
+  /// Lote de lecturas GPS (máximo [maxReadingsPerBatch]).
+  Future<PositionsResult> recordPositions(String tripId, List<GpsReading> readings);
 }
+
+const maxReadingsPerBatch = 500;
 
 class HttpTripApi implements TripApi {
   HttpTripApi(this._client);
@@ -94,6 +100,18 @@ class HttpTripApi implements TripApi {
       _client.post(
         '/trips/$tripId/passengers/$studentId/undo',
         body: {'clientEventId': clientEventId},
+      );
+
+  @override
+  Future<PositionsResult> recordPositions(
+    String tripId,
+    List<GpsReading> readings,
+  ) async =>
+      PositionsResult.fromJson(
+        await _client.post('/tracking/positions', body: {
+          'tripId': tripId,
+          'readings': [for (final r in readings) r.toJson()],
+        }) as Map<String, dynamic>,
       );
 }
 

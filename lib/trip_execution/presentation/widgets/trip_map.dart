@@ -29,12 +29,13 @@ class _TripMapState extends State<TripMap> {
         if (_live.position case final p?) LatLng(p.latitude, p.longitude),
       ];
 
-  /// Encuadra todo el recorrido una vez por viaje (sin pelear con el gesto
-  /// del conductor en cada refresco).
+  /// Encuadra el recorrido una vez por viaje y otra cuando aparece el
+  /// vehículo (sin pelear con el gesto del conductor en cada refresco).
   void _fit() {
     final pts = _points;
-    if (!_ready || pts.isEmpty || _fittedFor == _live.tripId) return;
-    _fittedFor = _live.tripId;
+    final key = '${_live.tripId}/${_live.position != null}';
+    if (!_ready || pts.isEmpty || _fittedFor == key) return;
+    _fittedFor = key;
     _controller.fitCamera(
       CameraFit.coordinates(
         coordinates: pts,

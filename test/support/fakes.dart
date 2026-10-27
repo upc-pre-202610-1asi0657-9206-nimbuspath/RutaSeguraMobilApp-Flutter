@@ -9,9 +9,13 @@ import 'package:rutasegura/core/storage/photo_store.dart';
 import 'package:rutasegura/stakeholder/domain/model/route_student.dart';
 import 'package:rutasegura/stakeholder/infrastructure/stakeholder_api.dart';
 import 'package:rutasegura/trip_execution/application/checklist.dart';
+import 'package:rutasegura/trip_execution/application/tracking_controller.dart';
+import 'package:rutasegura/trip_execution/application/tracking_engine.dart';
+import 'package:rutasegura/trip_execution/domain/model/tracking.dart';
 import 'package:rutasegura/trip_execution/domain/model/trip_live.dart';
 import 'package:rutasegura/trip_execution/domain/model/trip_models.dart';
 import 'package:rutasegura/trip_execution/infrastructure/trip_api.dart';
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
@@ -211,6 +215,20 @@ class FakeTripApi implements TripApi {
     ]);
   }
 
+  /// Lotes recibidos (cada uno es la lista de lecturas enviada).
+  final positionBatches = <List<GpsReading>>[];
+  Object? positionsError;
+
+  @override
+  Future<PositionsResult> recordPositions(
+    String tripId,
+    List<GpsReading> readings,
+  ) async {
+    if (positionsError != null) throw positionsError!;
+    positionBatches.add(List.of(readings));
+    return PositionsResult(accepted: readings.length, ignored: 0, rejected: 0);
+  }
+
   @override
   Future<void> undoPassenger(
     String tripId, {
@@ -269,6 +287,38 @@ class FakeStakeholderApi implements StakeholderApi {
   }
 }
 
+/// GPS simulado: `emit` hace llegar una lectura como si la diera el teléfono.
+class FakePositionSource implements PositionSource {
+  FakePositionSource({this.permission = TrackingPermission.granted});
+
+  TrackingPermission permission;
+  final _controller = StreamController<GpsReading>.broadcast();
+  bool get hasListener => _controller.hasListener;
+
+  void emit(GpsReading r) => _controller.add(r);
+
+  @override
+  Future<TrackingPermission> ensurePermission() async => permission;
+
+  @override
+  Stream<GpsReading> readings() => _controller.stream;
+}
+
+GpsReading testReading({
+  double lat = -12.1,
+  double lon = -77.0,
+  double accuracy = 8,
+  double speedKmh = 20,
+  DateTime? at,
+}) =>
+    GpsReading(
+      latitude: lat,
+      longitude: lon,
+      recordedAt: at ?? DateTime.now(),
+      accuracyMeters: accuracy,
+      speedKmh: speedKmh,
+    );
+
 class FakeDeviceChecks implements DeviceChecks {
   @override
   Future<CheckResult> gps({bool requestPermission = false}) async =>
@@ -288,6 +338,8 @@ class FakeDeviceChecks implements DeviceChecks {
 
 /// Overrides para probar la app sin red.
 List<Override> fakeBackend({
+  PositionSource? gps,
+  Duration flushEvery = const Duration(hours: 1),
   TokenStorage? storage,
   IamApi? iam,
   RosterApi? roster,
@@ -303,6 +355,8 @@ List<Override> fakeBackend({
       tripApiProvider.overrideWithValue(trips ?? FakeTripApi()),
       stakeholderApiProvider.overrideWithValue(stakeholders ?? FakeStakeholderApi()),
       deviceChecksProvider.overrideWithValue(FakeDeviceChecks()),
+      positionSourceProvider.overrideWithValue(gps ?? FakePositionSource()),
+      trackingFlushEveryProvider.overrideWithValue(flushEvery),
       positionReaderProvider.overrideWithValue(() async => (latitude: -12.1, longitude: -77.0)),
       tripMapBuilderProvider.overrideWithValue((_) => const SizedBox.expand(key: Key('fake-map'))),
       localCacheProvider.overrideWithValue(cache ?? InMemoryLocalCache()),
