@@ -1,0 +1,102 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../core/network/api_client.dart';
+import '../domain/model/trip_live.dart';
+import '../domain/model/trip_models.dart';
+
+/// Última lectura GPS buena, que acompaña a las acciones del conductor.
+typedef GeoPoint = ({double latitude, double longitude});
+
+/// Acción del conductor sobre un alumno.
+enum PassengerAction { board, alight, absent }
+
+/// Trip & Tracking vía Gateway.
+///
+/// Toda acción lleva un `clientEventId` generado **al tocar**: reenviar la
+/// misma petición es seguro (responde 200 con `applied: false`).
+abstract interface class TripApi {
+  /// Agenda de hoy (hora de Lima), sin cancelados, ordenada por hora.
+  Future<List<ScheduledTrip>> agenda();
+
+  Future<void> start(String tripId, {required String clientEventId});
+
+  Future<TripLive> live(String tripId);
+
+  Future<void> recordPassenger(
+    String tripId,
+    PassengerAction action, {
+    required String studentId,
+    required String clientEventId,
+    required DateTime occurredAt,
+    GeoPoint? position,
+  });
+
+  Future<void> undoPassenger(
+    String tripId, {
+    required String studentId,
+    required String clientEventId,
+  });
+}
+
+class HttpTripApi implements TripApi {
+  HttpTripApi(this._client);
+
+  final ApiClient _client;
+
+  @override
+  Future<List<ScheduledTrip>> agenda() async => [
+        for (final t in await _client.get('/drivers/me/trips') as List)
+          ScheduledTrip.fromJson(t as Map<String, dynamic>),
+      ];
+
+  @override
+  Future<void> start(String tripId, {required String clientEventId}) =>
+      _client.post('/trips/$tripId/start', body: {'clientEventId': clientEventId});
+
+  @override
+  Future<TripLive> live(String tripId) async => TripLive.fromJson(
+        await _client.get('/trips/$tripId/live') as Map<String, dynamic>,
+      );
+
+  @override
+  Future<void> recordPassenger(
+    String tripId,
+    PassengerAction action, {
+    required String studentId,
+    required String clientEventId,
+    required DateTime occurredAt,
+    GeoPoint? position,
+  }) {
+    final path = switch (action) {
+      PassengerAction.board => 'boardings',
+      PassengerAction.alight => 'alightings',
+      PassengerAction.absent => 'absences',
+    };
+    return _client.post('/trips/$tripId/$path', body: {
+      'studentId': studentId,
+      'clientEventId': clientEventId,
+      'occurredAt': occurredAt.toUtc().toIso8601String(),
+      // Las ausencias no llevan posición.
+      if (position != null && action != PassengerAction.absent)
+        'position': {
+          'latitude': position.latitude,
+          'longitude': position.longitude,
+        },
+    });
+  }
+
+  @override
+  Future<void> undoPassenger(
+    String tripId, {
+    required String studentId,
+    required String clientEventId,
+  }) =>
+      _client.post(
+        '/trips/$tripId/passengers/$studentId/undo',
+        body: {'clientEventId': clientEventId},
+      );
+}
+
+final tripApiProvider = Provider<TripApi>(
+  (ref) => HttpTripApi(ref.watch(apiClientProvider)),
+);

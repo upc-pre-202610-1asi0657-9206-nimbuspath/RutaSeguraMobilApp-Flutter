@@ -1,80 +1,72 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/network/api_error.dart';
+import '../../../core/network/api_error_message.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/common.dart';
+import '../../../stakeholder/application/students_repository.dart';
+import '../../../stakeholder/domain/model/route_student.dart';
+import '../../application/trip_controller.dart';
+import '../../domain/model/trip_live.dart';
 import '../../domain/model/trip_models.dart';
+import '../../infrastructure/trip_api.dart';
+import '../widgets/student_avatar.dart';
 import '../widgets/student_boarding_card.dart';
 
-/// Registro de abordaje (o descenso) de los alumnos de una parada.
-/// Devuelve la lista de [BoardingRecord] al confirmar la parada.
-class BoardingPage extends StatefulWidget {
-  const BoardingPage({
-    super.key,
-    required this.stop,
-    required this.stopNumber,
-    required this.totalStops,
-    this.isPickup = true,
-  });
+/// Registro de abordaje (o descenso) de los alumnos de la siguiente parada.
+///
+/// Cada toque se aplica al instante y se envía al servidor con su propio
+/// `clientEventId`; si el servidor lo rechaza, la fila vuelve a su estado.
+class BoardingPage extends ConsumerWidget {
+  const BoardingPage({super.key, required this.trip});
 
-  final Stop stop;
-  final int stopNumber;
-  final int totalStops;
-  final bool isPickup;
+  final ScheduledTrip trip;
 
-  @override
-  State<BoardingPage> createState() => _BoardingPageState();
-}
-
-class _BoardingPageState extends State<BoardingPage> {
-  late final List<BoardingRecord> _records = [
-    for (final s in widget.stop.students) BoardingRecord(student: s),
-  ];
-
-  int get _pending =>
-      _records.where((r) => r.status == BoardingStatus.pending).length;
-
-  void _set(int i, BoardingStatus status) {
-    setState(() {
-      _records[i] = _records[i].copyWith(
-        status: status,
-        at: status == BoardingStatus.pending ? null : DateTime.now(),
-      );
-    });
+  Future<void> _run(
+    BuildContext context,
+    WidgetRef ref,
+    Future<ApiError?> Function(TripController c) action,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final error = await action(ref.read(tripControllerProvider(trip).notifier));
+    if (error != null) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(error.userMessage)));
+    }
   }
 
   @override
-  Widget build(BuildContext context) {
-    final movement = widget.isPickup ? 'subida' : 'bajada';
+  Widget build(BuildContext context, WidgetRef ref) {
+    final live = ref.watch(tripControllerProvider(trip)).value;
+    final students = {
+      for (final s in ref.watch(studentsProvider).value ?? const <RouteStudent>[])
+        s.studentId: s,
+    };
+    if (live == null) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    // Parada actual: la siguiente. Sin ella (última parada), lo pendiente.
+    final next = live.nextStop;
+    final passengers = next == null
+        ? [for (final p in live.passengers) if (p.status == PassengerStatus.pending) p]
+        : live.passengersAt(next.stopId);
+    final pending = passengers.where((p) => p.status == PassengerStatus.pending).length;
+    final isPickup = live.isPickup;
+    final movement = isPickup ? 'subida' : 'bajada';
 
     return Scaffold(
       body: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Encabezado
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 18, 0),
-              child: Row(
-                children: [
-                  const BackChevron(),
-                  const Spacer(),
-                  OutlinedButton.icon(
-                    onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('La cámara se conectará en la siguiente fase.')),
-                    ),
-                    icon: const Icon(Icons.photo_camera_outlined, color: AppColors.navy),
-                    label: Text('Foto', style: AppText.itemTitle.copyWith(fontSize: 16)),
-                    style: OutlinedButton.styleFrom(
-                      backgroundColor: AppColors.surface,
-                      side: const BorderSide(color: AppColors.border, width: 1.5),
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    ),
-                  ),
-                ],
-              ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(12, 8, 18, 0),
+              child: Row(children: [BackChevron(), Spacer()]),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 10, 20, 14),
@@ -82,11 +74,13 @@ class _BoardingPageState extends State<BoardingPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Parada ${widget.stopNumber} de ${widget.totalStops}, $movement',
+                    next == null
+                        ? 'Alumnos por registrar'
+                        : 'Parada ${next.sequence} de ${next.totalStops}, $movement',
                     style: AppText.caption.copyWith(fontSize: 15),
                   ),
                   const SizedBox(height: 4),
-                  Text(widget.stop.address, style: AppText.displayStyle(26)),
+                  Text(next?.name ?? trip.destination, style: AppText.displayStyle(26)),
                   const SizedBox(height: 6),
                   Text(
                     'Cada registro guarda la hora y tu ubicación.',
@@ -97,18 +91,56 @@ class _BoardingPageState extends State<BoardingPage> {
             ),
             const Divider(height: 1, color: AppColors.divider),
             Expanded(
-              child: ListView.separated(
-                padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
-                itemCount: _records.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 14),
-                itemBuilder: (_, i) => StudentBoardingCard(
-                  record: _records[i],
-                  isPickup: widget.isPickup,
-                  onBoarded: () => _set(i, BoardingStatus.boarded),
-                  onAbsent: () => _set(i, BoardingStatus.absent),
-                  onUndo: () => _set(i, BoardingStatus.pending),
-                ),
-              ),
+              child: passengers.isEmpty
+                  ? Center(
+                      child: Text(
+                        'No hay alumnos en esta parada.',
+                        style: AppText.caption.copyWith(fontSize: 16),
+                      ),
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+                      itemCount: passengers.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 14),
+                      itemBuilder: (_, i) {
+                        final p = passengers[i];
+                        final info = students[p.studentId];
+                        final id = p.studentId;
+                        return StudentBoardingCard(
+                          record: BoardingRecord(
+                            student: Student(
+                              id: id,
+                              fullName: info?.fullName ?? 'Alumno sin ficha',
+                              grade: info?.schoolGrade ?? '',
+                              guardianNotice: p.absentByGuardian
+                                  ? (p.absenceNote?.isNotEmpty ?? false
+                                      ? 'Su apoderado avisó que hoy no asiste: ${p.absenceNote}'
+                                      : 'Su apoderado avisó que hoy no asiste.')
+                                  : null,
+                            ),
+                            status: switch (p.status) {
+                              PassengerStatus.pending => BoardingStatus.pending,
+                              PassengerStatus.boarded => BoardingStatus.boarded,
+                              PassengerStatus.alighted => BoardingStatus.alighted,
+                              PassengerStatus.absent => BoardingStatus.absent,
+                            },
+                            at: p.alightedAt?.toLocal() ?? p.boardedAt?.toLocal(),
+                          ),
+                          avatar: info == null
+                              ? null
+                              : StudentAvatar(student: info),
+                          onBoarded: () => _run(context, ref,
+                              (c) => c.record(PassengerAction.board, id)),
+                          onAbsent: () => _run(context, ref,
+                              (c) => c.record(PassengerAction.absent, id)),
+                          onUndo: () => _run(context, ref, (c) => c.undo(id)),
+                          onAlighted: isPickup
+                              ? null
+                              : () => _run(context, ref,
+                                  (c) => c.record(PassengerAction.alight, id)),
+                        );
+                      },
+                    ),
             ),
             Container(
               decoration: const BoxDecoration(
@@ -117,11 +149,11 @@ class _BoardingPageState extends State<BoardingPage> {
               ),
               padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
               child: AppButton(
-                label: _pending > 0
-                    ? 'Faltan registrar $_pending ${_pending == 1 ? 'alumno' : 'alumnos'}'
+                label: pending > 0
+                    ? 'Faltan registrar $pending ${pending == 1 ? 'alumno' : 'alumnos'}'
                     : 'Confirmar parada',
-                icon: _pending > 0 ? null : Icons.check_rounded,
-                onPressed: _pending > 0 ? null : () => Navigator.of(context).pop(_records),
+                icon: pending > 0 ? null : Icons.check_rounded,
+                onPressed: pending > 0 ? null : () => Navigator.of(context).pop(),
               ),
             ),
           ],

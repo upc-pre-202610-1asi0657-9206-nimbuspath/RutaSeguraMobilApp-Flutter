@@ -1,82 +1,69 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/network/api_error.dart';
+import '../../../core/network/api_error_message.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/utils/date_format.dart';
 import '../../../core/widgets/app_button.dart';
+import '../../../stakeholder/application/students_repository.dart';
+import '../../../stakeholder/domain/model/route_student.dart';
+import '../../application/agenda_provider.dart';
+import '../../application/trip_controller.dart';
+import '../../domain/model/trip_live.dart';
 import '../../domain/model/trip_models.dart';
-import '../../infrastructure/mock_trip_repository.dart';
-import '../widgets/route_map_preview.dart';
+import '../widgets/trip_map.dart';
 import 'boarding_page.dart';
 import 'report_incident_page.dart';
 import 'sos_page.dart';
 import 'trip_summary_page.dart';
 
 /// Pantalla de viaje en curso: mapa, siguiente parada y acciones.
-class ActiveTripPage extends StatefulWidget {
+///
+/// Si el viaje aún no empezó, lo inicia al abrirse (`POST /trips/{id}/start`);
+/// si ya estaba en curso, solo lo retoma.
+class ActiveTripPage extends ConsumerStatefulWidget {
   const ActiveTripPage({super.key, required this.trip});
 
   final ScheduledTrip trip;
 
   @override
-  State<ActiveTripPage> createState() => _ActiveTripPageState();
+  ConsumerState<ActiveTripPage> createState() => _ActiveTripPageState();
 }
 
-class _ActiveTripPageState extends State<ActiveTripPage> {
-  static const _stops = MockTripRepository.remainingStops;
-
-  // ETA simulado por parada (lo calculará el servicio de tracking).
-  static const _eta = [(3, '850 m'), (6, '1,4 km'), (4, '900 m')];
-
-  final DateTime _startedAt = DateTime.now();
+class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
+    with WidgetsBindingObserver {
   final List<Incident> _incidents = [];
-  final List<Student> _absent = [];
-
-  int _stopIndex = 0; // índice dentro de _stops
-  int _onBoard = MockTripRepository.onBoardBeforeCurrentStop;
-  int _secondsSinceGps = 3;
-  Timer? _ticker;
-
-  int get _stopNumber =>
-      _allStopsDone ? widget.trip.stopsCount : _stops[_stopIndex].order;
-  bool get _allStopsDone => _stopIndex >= _stops.length;
 
   @override
   void initState() {
     super.initState();
-    // Simula el envío periódico de la ubicación (cada 5 s).
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      setState(() => _secondsSinceGps = (_secondsSinceGps + 1) % 6);
-    });
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
-    _ticker?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Al volver a primer plano se refresca el estado en vivo.
+    if (state == AppLifecycleState.resumed) {
+      ref.read(tripControllerProvider(widget.trip).notifier).refresh();
+    }
+  }
+
+  void _toast(String text) => ScaffoldMessenger.of(context)
+      .showSnackBar(SnackBar(content: Text(text)));
+
   Future<void> _openBoarding() async {
-    final records = await Navigator.of(context).push<List<BoardingRecord>>(
-      MaterialPageRoute(
-        builder: (_) => BoardingPage(
-          stop: _stops[_stopIndex],
-          totalStops: widget.trip.stopsCount,
-          stopNumber: _stopNumber,
-        ),
-      ),
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(builder: (_) => BoardingPage(trip: widget.trip)),
     );
-    if (records == null || !mounted) return;
-    setState(() {
-      _onBoard += records.where((r) => r.status == BoardingStatus.boarded).length;
-      _absent.addAll(
-        records.where((r) => r.status == BoardingStatus.absent).map((r) => r.student),
-      );
-      _stopIndex++;
-    });
   }
 
   Future<void> _openIncident() async {
@@ -85,21 +72,39 @@ class _ActiveTripPageState extends State<ActiveTripPage> {
     );
     if (incident == null || !mounted) return;
     setState(() => _incidents.add(incident));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Incidente enviado: ${incident.type.label}')),
-    );
+    _toast('Incidente enviado: ${incident.type.label}');
   }
 
-  void _openSos() {
+  void _openSos(TripLive live) {
     Navigator.of(context).push(
       MaterialPageRoute(
         fullscreenDialog: true,
-        builder: (_) => SosPage(onBoardCount: _onBoard),
+        builder: (_) => SosPage(onBoardCount: live.studentsOnBoard),
       ),
     );
   }
 
-  Future<void> _finishTrip() async {
+  /// Reglas locales de §10 antes de finalizar. `null` si se puede.
+  String? _cannotFinish(TripLive live) {
+    if (live.pendingCount > 0) {
+      final n = live.pendingCount;
+      return 'Faltan registrar $n ${n == 1 ? 'alumno' : 'alumnos'}.';
+    }
+    if (live.hasActiveSos) {
+      return 'Hay un SOS activo: tu empresa debe resolverlo antes de finalizar.';
+    }
+    if (!live.isPickup && live.studentsOnBoard > 0) {
+      return 'Aún hay alumnos a bordo.';
+    }
+    return null;
+  }
+
+  Future<void> _finishTrip(TripLive live) async {
+    final blocked = _cannotFinish(live);
+    if (blocked != null) {
+      _toast(blocked);
+      return;
+    }
     final confirm = await showModalBottomSheet<bool>(
       context: context,
       backgroundColor: AppColors.surface,
@@ -134,17 +139,34 @@ class _ActiveTripPageState extends State<ActiveTripPage> {
     );
     if (confirm != true || !mounted) return;
 
+    // Etapa 6: aquí se llamará a /complete y se leerá /summary.
+    final students = {
+      for (final s in ref.read(studentsProvider).value ?? const <RouteStudent>[])
+        s.studentId: s,
+    };
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => TripSummaryPage(
           summary: TripSummary(
             trip: widget.trip,
-            startedAt: _startedAt,
+            startedAt: live.startedAt?.toLocal() ?? DateTime.now(),
             endedAt: DateTime.now(),
-            arrivedCount: _onBoard,
-            absentStudents: _absent,
+            arrivedCount: live.passengers
+                .where((p) =>
+                    p.status == PassengerStatus.boarded ||
+                    p.status == PassengerStatus.alighted)
+                .length,
+            absentStudents: [
+              for (final p in live.passengers)
+                if (p.status == PassengerStatus.absent)
+                  Student(
+                    id: p.studentId,
+                    fullName: students[p.studentId]?.fullName ?? 'Alumno sin ficha',
+                    grade: students[p.studentId]?.schoolGrade ?? '',
+                  ),
+            ],
             incidents: _incidents,
-            nextTrip: MockTripRepository.afternoonTrip,
+            nextTrip: ref.read(agendaProvider).value?.later.firstOrNull,
           ),
         ),
       ),
@@ -153,57 +175,132 @@ class _ActiveTripPageState extends State<ActiveTripPage> {
 
   @override
   Widget build(BuildContext context) {
-    final elapsed = DateTime.now().difference(_startedAt).inMinutes;
+    final state = ref.watch(tripControllerProvider(widget.trip));
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
-      child: PopScope(
-        canPop: false,
-        onPopInvokedWithResult: (didPop, _) {
-          if (!didPop) _finishTrip();
-        },
-        child: Scaffold(
-          backgroundColor: AppColors.mapGround,
-          body: Column(
-            children: [
-              _Header(
+      child: state.when(
+        loading: () => _Status(
+          title: widget.trip.title,
+          child: const CircularProgressIndicator(color: AppColors.navy),
+        ),
+        error: (error, _) => state.hasValue
+            ? _body(state.requireValue)
+            : _Status(
                 title: widget.trip.title,
-                subtitle: 'En curso desde ${DateFmt.time(_startedAt)}, $elapsed min',
-                onFinish: _finishTrip,
+                message: error is ApiError
+                    ? error.userMessage
+                    : 'No pudimos abrir el viaje.',
+                onRetry: () => ref
+                    .read(tripControllerProvider(widget.trip).notifier)
+                    .retry(),
               ),
-              Expanded(
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: RouteMapPreview(
-                        nextStopLabel: _allStopsDone ? 'Colegio' : 'Parada $_stopNumber',
-                      ),
+        data: _body,
+      ),
+    );
+  }
+
+  Widget _body(TripLive live) {
+    final started = live.startedAt?.toLocal();
+    final elapsed = started == null ? 0 : DateTime.now().difference(started).inMinutes;
+    final next = live.nextStop;
+    final map = ref.watch(tripMapBuilderProvider);
+
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _finishTrip(live);
+      },
+      child: Scaffold(
+        backgroundColor: AppColors.mapGround,
+        body: Column(
+          children: [
+            _Header(
+              title: widget.trip.title,
+              subtitle: started == null
+                  ? 'En curso'
+                  : 'En curso desde ${DateFmt.time(started)}, $elapsed min',
+              onFinish: () => _finishTrip(live),
+            ),
+            Expanded(
+              child: Stack(
+                children: [
+                  Positioned.fill(child: map(live)),
+                  Positioned(
+                    left: 18,
+                    right: 18,
+                    top: 16,
+                    child: _SharingPill(seconds: live.position?.ageSeconds),
+                  ),
+                  Align(
+                    alignment: Alignment.bottomCenter,
+                    child: _BottomPanel(
+                      nextStop: next,
+                      boardingAtNext: live.boardingAtNextStop,
+                      destination: widget.trip.destination,
+                      onBoard: live.studentsOnBoard,
+                      totalStudents: live.totalStudents,
+                      isPickup: live.isPickup,
+                      hasActiveSos: live.hasActiveSos,
+                      pending: live.pendingCount,
+                      onRegister: _openBoarding,
+                      onIncident: _openIncident,
+                      onSos: () => _openSos(live),
+                      onFinish: () => _finishTrip(live),
                     ),
-                    Positioned(
-                      left: 18,
-                      right: 18,
-                      top: 16,
-                      child: _SharingPill(seconds: _secondsSinceGps),
-                    ),
-                    Align(
-                      alignment: Alignment.bottomCenter,
-                      child: _BottomPanel(
-                        stopNumber: _stopNumber,
-                        totalStops: widget.trip.stopsCount,
-                        stop: _allStopsDone ? null : _stops[_stopIndex],
-                        eta: _allStopsDone ? null : _eta[_stopIndex],
-                        destination: widget.trip.destination,
-                        onBoard: _onBoard,
-                        totalStudents: widget.trip.studentsCount,
-                        onRegister: _allStopsDone ? null : _openBoarding,
-                        onIncident: _openIncident,
-                        onSos: _openSos,
-                        onFinish: _finishTrip,
-                      ),
-                    ),
-                  ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Cargando (iniciando el viaje) o error con "Reintentar".
+class _Status extends StatelessWidget {
+  const _Status({required this.title, this.message, this.onRetry, this.child});
+
+  final String title;
+  final String? message;
+  final VoidCallback? onRetry;
+  final Widget? child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(title, style: AppText.displayStyle(24), textAlign: TextAlign.center),
+              const SizedBox(height: 20),
+              if (child != null) ...[
+                child!,
+                const SizedBox(height: 16),
+                Text('Iniciando el viaje…', style: AppText.caption.copyWith(fontSize: 15)),
+              ],
+              if (message != null) ...[
+                Text(
+                  message!,
+                  textAlign: TextAlign.center,
+                  style: AppText.bodyText.copyWith(fontSize: 16),
                 ),
-              ),
+                const SizedBox(height: 22),
+                if (onRetry != null)
+                  AppButton(label: 'Reintentar', onPressed: onRetry),
+                const SizedBox(height: 10),
+                AppButton(
+                  label: 'Volver',
+                  variant: AppButtonVariant.outline,
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
+              ],
             ],
           ),
         ),
@@ -267,7 +364,7 @@ class _Header extends StatelessWidget {
 
 class _SharingPill extends StatelessWidget {
   const _SharingPill({required this.seconds});
-  final int seconds;
+  final int? seconds;
 
   @override
   Widget build(BuildContext context) {
@@ -296,7 +393,11 @@ class _SharingPill extends StatelessWidget {
             ),
           ),
           Text(
-            seconds == 0 ? 'ahora' : 'hace $seconds s',
+            switch (seconds) {
+              null => 'esperando GPS',
+              <= 1 => 'ahora',
+              final s => 'hace $s s',
+            },
             style: AppText.caption.copyWith(fontSize: 15),
           ),
         ],
@@ -307,34 +408,44 @@ class _SharingPill extends StatelessWidget {
 
 class _BottomPanel extends StatelessWidget {
   const _BottomPanel({
-    required this.stopNumber,
-    required this.totalStops,
-    required this.stop,
-    required this.eta,
+    required this.nextStop,
+    required this.boardingAtNext,
     required this.destination,
     required this.onBoard,
     required this.totalStudents,
+    required this.isPickup,
+    required this.hasActiveSos,
+    required this.pending,
     required this.onRegister,
     required this.onIncident,
     required this.onSos,
     required this.onFinish,
   });
 
-  final int stopNumber;
-  final int totalStops;
-  final Stop? stop;
-  final (int, String)? eta;
+  final NextStop? nextStop;
+  final int boardingAtNext;
   final String destination;
   final int onBoard;
   final int totalStudents;
+  final bool isPickup;
+  final bool hasActiveSos;
+  final int pending;
   final VoidCallback? onRegister;
   final VoidCallback onIncident;
   final VoidCallback onSos;
   final VoidCallback onFinish;
 
+  String _stopCaption() {
+    if (boardingAtNext == 0) return 'Sin alumnos pendientes en esta parada';
+    if (isPickup) {
+      return boardingAtNext == 1 ? 'Sube 1 alumno' : 'Suben $boardingAtNext alumnos';
+    }
+    return boardingAtNext == 1 ? 'Baja 1 alumno' : 'Bajan $boardingAtNext alumnos';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final s = stop;
+    final s = nextStop;
     final progress = totalStudents == 0 ? 0.0 : onBoard / totalStudents;
 
     return Container(
@@ -359,30 +470,32 @@ class _BottomPanel extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          s == null ? 'Último tramo' : 'Siguiente parada, $stopNumber de $totalStops',
+                          s == null ? 'Último tramo' : 'Siguiente parada, ${s.sequence} de ${s.totalStops}',
                           style: AppText.caption.copyWith(fontSize: 15),
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          s?.address ?? destination,
+                          s?.name ?? destination,
                           style: AppText.displayStyle(22, weight: FontWeight.w700),
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          s == null ? 'Todos los alumnos van a bordo' : 'Suben ${s.students.length} alumnos',
+                          s == null
+                              ? (isPickup ? 'Todos los alumnos van a bordo' : 'Sin más paradas')
+                              : _stopCaption(),
                           style: AppText.bodyText.copyWith(fontSize: 16),
                         ),
                       ],
                     ),
                   ),
-                  if (s != null)
+                  if (s != null && s.etaMinutes != null)
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         Text.rich(
                           TextSpan(
                             children: [
-                              TextSpan(text: '${eta?.$1 ?? '-'}', style: AppText.displayStyle(34, height: 1)),
+                              TextSpan(text: '${s.etaMinutes}', style: AppText.displayStyle(34, height: 1)),
                               const TextSpan(
                                 text: ' min',
                                 style: TextStyle(
@@ -395,7 +508,7 @@ class _BottomPanel extends StatelessWidget {
                             ],
                           ),
                         ),
-                        Text(eta?.$2 ?? '', style: AppText.caption.copyWith(fontSize: 15)),
+                        Text(s.distanceLabel ?? '', style: AppText.caption.copyWith(fontSize: 15)),
                       ],
                     ),
                 ],
@@ -423,7 +536,22 @@ class _BottomPanel extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 18),
-              if (s != null)
+              if (hasActiveSos) ...[
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: AppColors.noticeBg,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    'SOS activo · tu empresa fue avisada',
+                    style: AppText.caption.copyWith(color: AppColors.noticeText, fontSize: 15),
+                  ),
+                ),
+              ],
+              if (s != null || pending > 0)
                 AppButton(
                   label: 'Registrar abordaje',
                   icon: Icons.check_box_outlined,

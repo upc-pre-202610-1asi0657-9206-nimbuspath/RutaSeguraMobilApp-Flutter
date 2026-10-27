@@ -1,26 +1,36 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/rs_logo.dart';
-import '../../../shell/main_shell.dart';
+import '../../application/session_controller.dart';
 
-/// Inicio de sesión del conductor.
-/// FASE VISUAL: "Ingresar" solo navega; la autenticación real
-/// (JWT contra Identity & Access Service) se conecta en el siguiente paso.
-class LoginPage extends StatefulWidget {
+/// Inicio de sesión del conductor (correo y contraseña contra IAM).
+/// Al ingresar, el `redirect` del router lleva a Inicio.
+class LoginPage extends ConsumerStatefulWidget {
   const LoginPage({super.key});
 
   @override
-  State<LoginPage> createState() => _LoginPageState();
+  ConsumerState<LoginPage> createState() => _LoginPageState();
 }
 
-class _LoginPageState extends State<LoginPage> {
+class _LoginPageState extends ConsumerState<LoginPage> {
   final _user = TextEditingController();
   final _password = TextEditingController();
   bool _obscure = true;
+  bool _loading = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    // Motivo del cierre de sesión (token vencido, cuenta rechazada...).
+    final session = ref.read(sessionControllerProvider);
+    if (session is SessionSignedOut) _error = session.message;
+  }
 
   @override
   void dispose() {
@@ -29,10 +39,28 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
-  void _submit() {
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const MainShell()),
-    );
+  Future<void> _submit() async {
+    if (_loading) return;
+    final email = _user.text.trim();
+    final password = _password.text;
+    if (email.isEmpty || password.isEmpty) {
+      setState(() => _error = 'Escribe tu correo y tu contraseña.');
+      return;
+    }
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    final error = await ref
+        .read(sessionControllerProvider.notifier)
+        .signIn(email, password);
+    // Si ingresó, el router ya navegó y esta página se desmontó.
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _error = error;
+    });
   }
 
   @override
@@ -65,11 +93,12 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                       const Spacer(),
                       const SizedBox(height: 32),
-                      const _Label('DNI o correo'),
+                      const _Label('Correo'),
                       _DarkField(
                         controller: _user,
                         keyboardType: TextInputType.emailAddress,
                         textInputAction: TextInputAction.next,
+                        autofillHints: const [AutofillHints.email],
                       ),
                       const SizedBox(height: 20),
                       const _Label('Contraseña'),
@@ -87,7 +116,23 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                       ),
                       const SizedBox(height: 28),
-                      AppButton(label: 'Ingresar', onPressed: _submit, height: 68, fontSize: 20),
+                      if (_error != null) ...[
+                        Text(
+                          _error!,
+                          style: AppText.caption.copyWith(
+                            color: const Color(0xFFFF8A80),
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                      AppButton(
+                        label: _loading ? 'Ingresando…' : 'Ingresar',
+                        onPressed: _loading ? null : _submit,
+                        height: 68,
+                        fontSize: 20,
+                      ),
                       const SizedBox(height: 22),
                       Text(
                         '¿Olvidaste tu contraseña? Pide a tu empresa de transporte que la restablezca.',
@@ -134,6 +179,7 @@ class _DarkField extends StatelessWidget {
     this.textInputAction,
     this.onSubmitted,
     this.suffix,
+    this.autofillHints,
   });
 
   final TextEditingController controller;
@@ -142,6 +188,7 @@ class _DarkField extends StatelessWidget {
   final TextInputAction? textInputAction;
   final ValueChanged<String>? onSubmitted;
   final Widget? suffix;
+  final Iterable<String>? autofillHints;
 
   @override
   Widget build(BuildContext context) {
@@ -156,6 +203,7 @@ class _DarkField extends StatelessWidget {
       keyboardType: keyboardType,
       textInputAction: textInputAction,
       onSubmitted: onSubmitted,
+      autofillHints: autofillHints,
       cursorColor: AppColors.yellow,
       style: const TextStyle(fontFamily: AppText.body, fontSize: 19, color: Colors.white),
       decoration: InputDecoration(

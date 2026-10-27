@@ -46,3 +46,7 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Config local con la IP de tu PC (copiar de config/device.example.json)
+config/device.json
+

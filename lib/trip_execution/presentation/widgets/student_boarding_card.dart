@@ -16,23 +16,30 @@ class StudentBoardingCard extends StatelessWidget {
     required this.onBoarded,
     required this.onAbsent,
     required this.onUndo,
-    this.isPickup = true,
+    this.onAlighted,
+    this.avatar,
   });
 
   final BoardingRecord record;
   final VoidCallback onBoarded;
   final VoidCallback onAbsent;
   final VoidCallback onUndo;
-  final bool isPickup;
+
+  /// "Bajó": solo en retorno, para el alumno que ya subió.
+  final VoidCallback? onAlighted;
+
+  /// Foto del alumno; por defecto, sus iniciales.
+  final Widget? avatar;
 
   @override
   Widget build(BuildContext context) {
     final student = record.student;
-    final doneLabel = isPickup ? 'Subió' : 'Bajó';
 
     Widget? chip;
     if (record.status == BoardingStatus.boarded) {
-      chip = StatusChip(label: '$doneLabel ${DateFmt.time(record.at!)}');
+      chip = StatusChip(label: 'Subió ${DateFmt.time(record.at!)}');
+    } else if (record.status == BoardingStatus.alighted) {
+      chip = StatusChip(label: 'Bajó ${DateFmt.time(record.at!)}');
     } else if (record.status == BoardingStatus.absent) {
       chip = const StatusChip(
         label: 'No vino',
@@ -51,7 +58,7 @@ class StudentBoardingCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                InitialsAvatar(initials: student.initials, size: 50),
+                avatar ?? InitialsAvatar(initials: student.initials, size: 50),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(
@@ -96,7 +103,7 @@ class StudentBoardingCard extends StatelessWidget {
                   const SizedBox(width: 10),
                   Expanded(
                     child: AppButton(
-                      label: doneLabel,
+                      label: 'Subió',
                       height: 54,
                       fontSize: 18,
                       onPressed: onBoarded,
@@ -104,7 +111,36 @@ class StudentBoardingCard extends StatelessWidget {
                   ),
                 ],
               ),
-            ] else ...[
+            ] else if (record.status == BoardingStatus.boarded && onAlighted != null) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  GestureDetector(
+                    onTap: onUndo,
+                    child: const Text(
+                      'Deshacer',
+                      style: TextStyle(
+                        fontFamily: AppText.body,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.link,
+                        decoration: TextDecoration.underline,
+                        decorationColor: AppColors.link,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 18),
+                  Expanded(
+                    child: AppButton(
+                      label: 'Bajó',
+                      height: 54,
+                      fontSize: 18,
+                      onPressed: onAlighted,
+                    ),
+                  ),
+                ],
+              ),
+            ] else if (record.status != BoardingStatus.alighted) ...[
               const SizedBox(height: 14),
               GestureDetector(
                 onTap: onUndo,
