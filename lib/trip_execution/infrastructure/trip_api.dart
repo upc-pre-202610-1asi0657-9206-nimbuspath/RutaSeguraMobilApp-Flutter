@@ -38,6 +38,29 @@ abstract interface class TripApi {
     required String clientEventId,
   });
 
+  Future<void> reportIncident(
+    String tripId, {
+    required IncidentType type,
+    required String clientEventId,
+    required DateTime occurredAt,
+    required bool notifyGuardians,
+    String? detail,
+    GeoPoint? position,
+  });
+
+  /// SOS: la cuenta regresiva de 5 s es solo de la app; esto se llama al
+  /// terminarla. [position] es opcional: nunca falla por falta de GPS.
+  Future<void> raiseSos(
+    String tripId, {
+    required String clientEventId,
+    required DateTime occurredAt,
+    GeoPoint? position,
+  });
+
+  Future<void> complete(String tripId, {required String clientEventId});
+
+  Future<TripSummaryData> summary(String tripId);
+
   /// Lote de lecturas GPS (máximo [maxReadingsPerBatch]).
   Future<PositionsResult> recordPositions(String tripId, List<GpsReading> readings);
 }
@@ -100,6 +123,55 @@ class HttpTripApi implements TripApi {
       _client.post(
         '/trips/$tripId/passengers/$studentId/undo',
         body: {'clientEventId': clientEventId},
+      );
+
+  @override
+  Future<void> reportIncident(
+    String tripId, {
+    required IncidentType type,
+    required String clientEventId,
+    required DateTime occurredAt,
+    required bool notifyGuardians,
+    String? detail,
+    GeoPoint? position,
+  }) =>
+      _client.post('/trips/$tripId/incidents', body: {
+        'clientEventId': clientEventId,
+        'incidentType': type.apiName,
+        'detail': ?detail,
+        'notifyGuardians': notifyGuardians,
+        'occurredAt': occurredAt.toUtc().toIso8601String(),
+        if (position != null)
+          'position': {
+            'latitude': position.latitude,
+            'longitude': position.longitude,
+          },
+      });
+
+  @override
+  Future<void> raiseSos(
+    String tripId, {
+    required String clientEventId,
+    required DateTime occurredAt,
+    GeoPoint? position,
+  }) =>
+      _client.post('/trips/$tripId/sos', body: {
+        'clientEventId': clientEventId,
+        'occurredAt': occurredAt.toUtc().toIso8601String(),
+        if (position != null)
+          'position': {
+            'latitude': position.latitude,
+            'longitude': position.longitude,
+          },
+      });
+
+  @override
+  Future<void> complete(String tripId, {required String clientEventId}) =>
+      _client.post('/trips/$tripId/complete', body: {'clientEventId': clientEventId});
+
+  @override
+  Future<TripSummaryData> summary(String tripId) async => TripSummaryData.fromJson(
+        await _client.get('/trips/$tripId/summary') as Map<String, dynamic>,
       );
 
   @override

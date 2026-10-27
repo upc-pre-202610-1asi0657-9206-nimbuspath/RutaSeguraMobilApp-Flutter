@@ -215,6 +215,54 @@ class FakeTripApi implements TripApi {
     ]);
   }
 
+  final incidents = <String>[]; // `HeavyTraffic|detalle|notificar`
+  final sosEvents = <String>[]; // clientEventId
+  final completeEvents = <String>[];
+  Object? incidentError;
+  Object? sosError;
+  Object? completeError;
+  TripSummaryData? summaryData;
+  int summaryCalls = 0;
+
+  @override
+  Future<void> reportIncident(
+    String tripId, {
+    required IncidentType type,
+    required String clientEventId,
+    required DateTime occurredAt,
+    required bool notifyGuardians,
+    String? detail,
+    GeoPoint? position,
+  }) async {
+    if (incidentError != null) throw incidentError!;
+    incidents.add('${type.apiName}|${detail ?? ''}|$notifyGuardians');
+  }
+
+  @override
+  Future<void> raiseSos(
+    String tripId, {
+    required String clientEventId,
+    required DateTime occurredAt,
+    GeoPoint? position,
+  }) async {
+    if (sosError != null) throw sosError!;
+    sosEvents.add(clientEventId);
+  }
+
+  @override
+  Future<void> complete(String tripId, {required String clientEventId}) async {
+    completeEvents.add(clientEventId);
+    if (completeError != null) throw completeError!;
+  }
+
+  @override
+  Future<TripSummaryData> summary(String tripId) async {
+    summaryCalls++;
+    final d = summaryData;
+    if (d == null) throw const ApiError(kind: ApiErrorKind.network);
+    return d;
+  }
+
   /// Lotes recibidos (cada uno es la lista de lecturas enviada).
   final positionBatches = <List<GpsReading>>[];
   Object? positionsError;

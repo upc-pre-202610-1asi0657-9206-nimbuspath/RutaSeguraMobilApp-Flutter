@@ -177,16 +177,32 @@ class BoardingRecord {
 }
 
 enum IncidentType {
-  heavyTraffic('Tráfico intenso'),
-  routeDeviation('Desvío de ruta'),
-  vehicleFailure('Falla del vehículo'),
-  studentUnwell('Alumno se siente mal'),
-  accident('Accidente'),
-  other('Otro');
+  heavyTraffic('Tráfico intenso', 'HeavyTraffic'),
+  routeDeviation('Desvío de ruta', 'RouteDeviation'),
+  vehicleFailure('Falla del vehículo', 'VehicleFailure'),
+  studentUnwell('Alumno se siente mal', 'StudentUnwell'),
+  accident('Accidente', 'Accident'),
+  other('Otro', 'Other');
 
-  const IncidentType(this.label);
+  const IncidentType(this.label, this.apiName);
   final String label;
+
+  /// Valor de `incidentType` en el backend.
+  final String apiName;
+
+  /// "Otro" exige un detalle (INCIDENT_DETAIL_REQUIRED).
+  bool get requiresDetail => this == other;
+
+  static IncidentType? fromApi(String? name) {
+    for (final t in values) {
+      if (t.apiName == name) return t;
+    }
+    return null;
+  }
 }
+
+/// Máximo de caracteres del detalle de un incidente.
+const incidentDetailMaxLength = 500;
 
 class Incident {
   const Incident({

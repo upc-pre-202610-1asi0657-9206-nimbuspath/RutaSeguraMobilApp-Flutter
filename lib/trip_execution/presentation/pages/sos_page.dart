@@ -2,27 +2,35 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
+import '../../../core/network/api_error_message.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/common.dart';
+import '../../application/trip_controller.dart';
+import '../../domain/model/trip_models.dart';
 
-enum _SosState { idle, countdown, sent }
+enum _SosState { idle, countdown, sending, sent }
 
-/// Pantalla de emergencia. Al tocar SOS hay 5 s para cancelar
-/// antes de enviar la alerta.
-class SosPage extends StatefulWidget {
-  const SosPage({super.key, required this.onBoardCount});
+/// Pantalla de emergencia. Al tocar SOS hay 5 s para cancelar; al terminar
+/// la cuenta se envía la alerta (sin red, se reintenta cada pocos segundos
+/// con el mismo `clientEventId`).
+class SosPage extends ConsumerStatefulWidget {
+  const SosPage({super.key, required this.trip});
 
-  final int onBoardCount;
+  final ScheduledTrip trip;
 
   @override
-  State<SosPage> createState() => _SosPageState();
+  ConsumerState<SosPage> createState() => _SosPageState();
 }
 
-class _SosPageState extends State<SosPage> with SingleTickerProviderStateMixin {
+class _SosPageState extends ConsumerState<SosPage>
+    with SingleTickerProviderStateMixin {
   static const _countdownSeconds = 5;
+  static const _retryEvery = Duration(seconds: 3);
 
   late final AnimationController _pulse = AnimationController(
     vsync: this,
@@ -32,6 +40,8 @@ class _SosPageState extends State<SosPage> with SingleTickerProviderStateMixin {
   _SosState _state = _SosState.idle;
   int _remaining = _countdownSeconds;
   Timer? _timer;
+  bool _retrying = false;
+  String? _failure;
 
   @override
   void dispose() {
@@ -50,12 +60,44 @@ class _SosPageState extends State<SosPage> with SingleTickerProviderStateMixin {
       if (_remaining <= 1) {
         t.cancel();
         HapticFeedback.heavyImpact();
-        setState(() => _state = _SosState.sent);
+        _send();
       } else {
         HapticFeedback.selectionClick();
         setState(() => _remaining--);
       }
     });
+  }
+
+  /// El `clientEventId` se genera al terminar la cuenta y se reutiliza en
+  /// cada reintento.
+  Future<void> _send() async {
+    final eventId = const Uuid().v4();
+    final at = DateTime.now();
+    setState(() {
+      _state = _SosState.sending;
+      _retrying = false;
+      _failure = null;
+    });
+    final controller = ref.read(tripControllerProvider(widget.trip).notifier);
+    while (mounted) {
+      final error = await controller.sendSos(eventId, at);
+      if (!mounted) return;
+      if (error == null) {
+        setState(() => _state = _SosState.sent);
+        return;
+      }
+      if (!error.isRetryable) {
+        // Regla de negocio (p. ej. el viaje ya no está en curso): reintentar
+        // igual no sirve. Se ofrece reintentar a mano.
+        setState(() {
+          _state = _SosState.idle;
+          _failure = error.userMessage;
+        });
+        return;
+      }
+      setState(() => _retrying = true);
+      await Future<void>.delayed(_retryEvery);
+    }
   }
 
   void _cancel() {
@@ -66,69 +108,94 @@ class _SosPageState extends State<SosPage> with SingleTickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     final sent = _state == _SosState.sent;
+    final sending = _state == _SosState.sending;
+    final onBoard =
+        ref.watch(tripControllerProvider(widget.trip)).value?.studentsOnBoard ??
+        0;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
-      child: Scaffold(
-        backgroundColor: AppColors.emergencyBg,
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 20),
-            child: Column(
-              children: [
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: _state == _SosState.countdown
-                      ? const SizedBox(height: 46)
-                      : const BackChevron(color: Colors.white, label: 'Volver al viaje'),
-                ),
-                const SizedBox(height: 24),
-                Text(
-                  sent ? 'Alerta enviada' : 'Emergencia',
-                  style: AppText.displayStyle(32, color: Colors.white),
-                ),
-                const SizedBox(height: 14),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Text(
-                    sent
-                        ? 'Tu empresa y las familias de los ${widget.onBoardCount} alumnos a bordo ya fueron avisados. Siguen viendo tu ubicación en vivo.'
-                        : 'Avisa de inmediato a tu empresa y a las familias de los ${widget.onBoardCount} alumnos a bordo, con tu ubicación en vivo.',
-                    textAlign: TextAlign.center,
-                    style: AppText.bodyText.copyWith(color: const Color(0xFFF3D6D3), fontSize: 17),
+      child: PopScope(
+        // No se puede salir mientras la alerta se está enviando.
+        canPop: !sending && _state != _SosState.countdown,
+        child: Scaffold(
+          backgroundColor: AppColors.emergencyBg,
+          body: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 20),
+              child: Column(
+                children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: _state == _SosState.countdown || sending
+                        ? const SizedBox(height: 46)
+                        : const BackChevron(
+                            color: Colors.white,
+                            label: 'Volver al viaje',
+                          ),
                   ),
-                ),
-                const Spacer(),
-                _SosButton(
-                  pulse: _pulse,
-                  state: _state,
-                  remaining: _remaining,
-                  onTap: _state == _SosState.idle ? _start : null,
-                ),
-                const Spacer(),
-                if (_state == _SosState.countdown)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    child: AppButton(
-                      label: 'Cancelar',
-                      variant: AppButtonVariant.neutral,
-                      onPressed: _cancel,
-                    ),
-                  )
-                else if (sent)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    child: AppButton(
-                      label: 'Volver al viaje',
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                  )
-                else
+                  const SizedBox(height: 24),
                   Text(
-                    'Tendrás $_countdownSeconds segundos para cancelar.',
-                    style: AppText.caption.copyWith(color: const Color(0xFFF3D6D3), fontSize: 15),
+                    sent
+                        ? 'Alerta enviada'
+                        : (sending ? 'Enviando alerta' : 'Emergencia'),
+                    style: AppText.displayStyle(32, color: Colors.white),
                   ),
-              ],
+                  const SizedBox(height: 14),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      sent
+                          ? 'SOS activo: tu empresa fue avisada. Siguen viendo tu ubicación en vivo.'
+                          : sending
+                          ? (_retrying
+                                ? 'Sin conexión. Reintentando cada pocos segundos, no cierres la app.'
+                                : 'Avisando a tu empresa…')
+                          : 'Avisa de inmediato a tu empresa y a ${onBoard == 1 ? 'la familia del alumno a bordo' : 'las familias de los $onBoard alumnos a bordo'}, con tu ubicación en vivo.',
+                      textAlign: TextAlign.center,
+                      style: AppText.bodyText.copyWith(
+                        color: const Color(0xFFF3D6D3),
+                        fontSize: 17,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  _SosButton(
+                    pulse: _pulse,
+                    state: _state,
+                    remaining: _remaining,
+                    onTap: _state == _SosState.idle ? _start : null,
+                  ),
+                  const Spacer(),
+                  if (_state == _SosState.countdown)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: AppButton(
+                        label: 'Cancelar',
+                        variant: AppButtonVariant.neutral,
+                        onPressed: _cancel,
+                      ),
+                    )
+                  else if (sent)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: AppButton(
+                        label: 'Volver al viaje',
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                    )
+                  else if (!sending)
+                    Text(
+                      _failure ??
+                          'Tendrás $_countdownSeconds segundos para cancelar.',
+                      textAlign: TextAlign.center,
+                      style: AppText.caption.copyWith(
+                        color: const Color(0xFFF3D6D3),
+                        fontSize: 15,
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
@@ -160,6 +227,7 @@ class _SosButton extends StatelessWidget {
         label = 'SOS';
       case _SosState.countdown:
         label = '$remaining';
+      case _SosState.sending:
       case _SosState.sent:
         label = '';
     }
@@ -196,7 +264,9 @@ class _SosButton extends StatelessWidget {
           );
         },
         child: Material(
-          color: state == _SosState.sent ? const Color(0xFF2E7D4F) : AppColors.emergencyButton,
+          color: state == _SosState.sent
+              ? const Color(0xFF2E7D4F)
+              : AppColors.emergencyButton,
           shape: const CircleBorder(),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
@@ -206,8 +276,27 @@ class _SosButton extends StatelessWidget {
               height: size,
               child: Center(
                 child: state == _SosState.sent
-                    ? const Icon(Icons.check_rounded, color: Colors.white, size: 110)
-                    : Text(label, style: AppText.displayStyle(state == _SosState.idle ? 52 : 90, color: Colors.white)),
+                    ? const Icon(
+                        Icons.check_rounded,
+                        color: Colors.white,
+                        size: 110,
+                      )
+                    : state == _SosState.sending
+                    ? const SizedBox(
+                        width: 64,
+                        height: 64,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 6,
+                        ),
+                      )
+                    : Text(
+                        label,
+                        style: AppText.displayStyle(
+                          state == _SosState.idle ? 52 : 90,
+                          color: Colors.white,
+                        ),
+                      ),
               ),
             ),
           ),

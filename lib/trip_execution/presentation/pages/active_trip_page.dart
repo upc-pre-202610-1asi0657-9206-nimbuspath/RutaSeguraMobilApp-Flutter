@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../../core/network/api_error.dart';
 import '../../../core/network/api_error_message.dart';
@@ -40,6 +41,11 @@ class ActiveTripPage extends ConsumerStatefulWidget {
 class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
     with WidgetsBindingObserver {
   final List<Incident> _incidents = [];
+  bool _finishing = false;
+
+  /// Se conserva entre reintentos de "Finalizar": reenviar `/complete` con el
+  /// mismo id es seguro.
+  String? _completeEventId;
 
   @override
   void initState() {
@@ -61,8 +67,8 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
     }
   }
 
-  void _toast(String text) => ScaffoldMessenger.of(context)
-      .showSnackBar(SnackBar(content: Text(text)));
+  void _toast(String text) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
 
   Future<void> _openBoarding() async {
     await Navigator.of(context).push<void>(
@@ -72,18 +78,18 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
 
   Future<void> _openIncident() async {
     final incident = await Navigator.of(context).push<Incident>(
-      MaterialPageRoute(builder: (_) => const ReportIncidentPage()),
+      MaterialPageRoute(builder: (_) => ReportIncidentPage(trip: widget.trip)),
     );
     if (incident == null || !mounted) return;
     setState(() => _incidents.add(incident));
     _toast('Incidente enviado: ${incident.type.label}');
   }
 
-  void _openSos(TripLive live) {
+  void _openSos() {
     Navigator.of(context).push(
       MaterialPageRoute(
         fullscreenDialog: true,
-        builder: (_) => SosPage(onBoardCount: live.studentsOnBoard),
+        builder: (_) => SosPage(trip: widget.trip),
       ),
     );
   }
@@ -104,6 +110,7 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
   }
 
   Future<void> _finishTrip(TripLive live) async {
+    if (_finishing) return;
     final blocked = _cannotFinish(live);
     if (blocked != null) {
       _toast(blocked);
@@ -129,7 +136,10 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
                 style: AppText.caption.copyWith(fontSize: 15),
               ),
               const SizedBox(height: 22),
-              AppButton(label: 'Sí, finalizar', onPressed: () => Navigator.pop(ctx, true)),
+              AppButton(
+                label: 'Sí, finalizar',
+                onPressed: () => Navigator.pop(ctx, true),
+              ),
               const SizedBox(height: 10),
               AppButton(
                 label: 'Seguir en viaje',
@@ -143,33 +153,74 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
     );
     if (confirm != true || !mounted) return;
 
-    // Etapa 6: aquí se llamará a /complete y se leerá /summary.
+    setState(() => _finishing = true);
+    final controller = ref.read(tripControllerProvider(widget.trip).notifier);
+    final error = await controller.complete(
+      _completeEventId ??= const Uuid().v4(),
+    );
+    if (!mounted) return;
+    if (error != null) {
+      setState(() => _finishing = false);
+      _toast(error.userMessage);
+      return;
+    }
+
+    // Terminó: la agenda de Inicio ya no debe mostrar este viaje.
+    ref.invalidate(agendaProvider);
+    final data = await controller.loadSummary();
+    if (!mounted) return;
+
     final students = {
-      for (final s in ref.read(studentsProvider).value ?? const <RouteStudent>[])
+      for (final s
+          in ref.read(studentsProvider).value ?? const <RouteStudent>[])
         s.studentId: s,
     };
+    Student studentFor(LivePassenger p) => Student(
+      id: p.studentId,
+      fullName: students[p.studentId]?.fullName ?? 'Alumno sin ficha',
+      grade: students[p.studentId]?.schoolGrade ?? '',
+      guardianNotice: p.absentByGuardian ? 'aviso del apoderado' : null,
+    );
+
+    // Sin resumen del servidor (p. ej. se cayó la señal justo ahora) se
+    // arma con lo último que se sabe.
+    final absent =
+        data?.absent ??
+        [
+          for (final p in live.passengers)
+            if (p.status == PassengerStatus.absent) p,
+        ];
+    final incidents = data == null
+        ? _incidents
+        : [
+            for (final i in data.incidents)
+              Incident(
+                type: IncidentType.fromApi(i.type) ?? IncidentType.other,
+                at: i.occurredAt?.toLocal() ?? DateTime.now(),
+                detail: i.detail,
+              ),
+          ];
+
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => TripSummaryPage(
           summary: TripSummary(
             trip: widget.trip,
-            startedAt: live.startedAt?.toLocal() ?? DateTime.now(),
-            endedAt: DateTime.now(),
-            arrivedCount: live.passengers
-                .where((p) =>
-                    p.status == PassengerStatus.boarded ||
-                    p.status == PassengerStatus.alighted)
-                .length,
-            absentStudents: [
-              for (final p in live.passengers)
-                if (p.status == PassengerStatus.absent)
-                  Student(
-                    id: p.studentId,
-                    fullName: students[p.studentId]?.fullName ?? 'Alumno sin ficha',
-                    grade: students[p.studentId]?.schoolGrade ?? '',
-                  ),
-            ],
-            incidents: _incidents,
+            startedAt:
+                (data?.startedAt ?? live.startedAt)?.toLocal() ??
+                DateTime.now(),
+            endedAt: data?.completedAt?.toLocal() ?? DateTime.now(),
+            arrivedCount:
+                data?.delivered ??
+                live.passengers
+                    .where(
+                      (p) =>
+                          p.status == PassengerStatus.boarded ||
+                          p.status == PassengerStatus.alighted,
+                    )
+                    .length,
+            absentStudents: [for (final p in absent) studentFor(p)],
+            incidents: incidents,
             nextTrip: ref.read(agendaProvider).value?.later.firstOrNull,
           ),
         ),
@@ -206,7 +257,9 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
 
   Widget _body(TripLive live) {
     final started = live.startedAt?.toLocal();
-    final elapsed = started == null ? 0 : DateTime.now().difference(started).inMinutes;
+    final elapsed = started == null
+        ? 0
+        : DateTime.now().difference(started).inMinutes;
     final next = live.nextStop;
     final map = ref.watch(tripMapBuilderProvider);
     // La ubicación se comparte solo mientras el viaje está en curso: al dejar
@@ -218,49 +271,65 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _finishTrip(live);
+        if (!didPop && !_finishing) _finishTrip(live);
       },
       child: Scaffold(
         backgroundColor: AppColors.mapGround,
-        body: Column(
+        body: Stack(
           children: [
-            _Header(
-              title: widget.trip.title,
-              subtitle: started == null
-                  ? 'En curso'
-                  : 'En curso desde ${DateFmt.time(started)}, $elapsed min',
-              onFinish: () => _finishTrip(live),
+            Column(
+              children: [
+                _Header(
+                  title: widget.trip.title,
+                  subtitle: started == null
+                      ? 'En curso'
+                      : 'En curso desde ${DateFmt.time(started)}, $elapsed min',
+                  onFinish: () => _finishTrip(live),
+                ),
+                Expanded(
+                  child: Stack(
+                    children: [
+                      Positioned.fill(child: map(live)),
+                      Positioned(
+                        left: 18,
+                        right: 18,
+                        top: 16,
+                        child: _SharingPill(
+                          tracking: tracking,
+                          serverAgeSeconds: live.position?.ageSeconds,
+                        ),
+                      ),
+                      Align(
+                        alignment: Alignment.bottomCenter,
+                        child: _BottomPanel(
+                          nextStop: next,
+                          boardingAtNext: live.boardingAtNextStop,
+                          destination: widget.trip.destination,
+                          onBoard: live.studentsOnBoard,
+                          totalStudents: live.totalStudents,
+                          isPickup: live.isPickup,
+                          hasActiveSos: live.hasActiveSos,
+                          pending: live.pendingCount,
+                          onRegister: _openBoarding,
+                          onIncident: _openIncident,
+                          onSos: _openSos,
+                          onFinish: () => _finishTrip(live),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            Expanded(
-              child: Stack(
-                children: [
-                  Positioned.fill(child: map(live)),
-                  Positioned(
-                    left: 18,
-                    right: 18,
-                    top: 16,
-                    child: _SharingPill(tracking: tracking, serverAgeSeconds: live.position?.ageSeconds),
+            if (_finishing)
+              const Positioned.fill(
+                child: ColoredBox(
+                  color: Color(0x80000000),
+                  child: Center(
+                    child: CircularProgressIndicator(color: Colors.white),
                   ),
-                  Align(
-                    alignment: Alignment.bottomCenter,
-                    child: _BottomPanel(
-                      nextStop: next,
-                      boardingAtNext: live.boardingAtNextStop,
-                      destination: widget.trip.destination,
-                      onBoard: live.studentsOnBoard,
-                      totalStudents: live.totalStudents,
-                      isPickup: live.isPickup,
-                      hasActiveSos: live.hasActiveSos,
-                      pending: live.pendingCount,
-                      onRegister: _openBoarding,
-                      onIncident: _openIncident,
-                      onSos: () => _openSos(live),
-                      onFinish: () => _finishTrip(live),
-                    ),
-                  ),
-                ],
+                ),
               ),
-            ),
           ],
         ),
       ),
@@ -287,12 +356,19 @@ class _Status extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text(title, style: AppText.displayStyle(24), textAlign: TextAlign.center),
+              Text(
+                title,
+                style: AppText.displayStyle(24),
+                textAlign: TextAlign.center,
+              ),
               const SizedBox(height: 20),
               if (child != null) ...[
                 child!,
                 const SizedBox(height: 16),
-                Text('Iniciando el viaje…', style: AppText.caption.copyWith(fontSize: 15)),
+                Text(
+                  'Iniciando el viaje…',
+                  style: AppText.caption.copyWith(fontSize: 15),
+                ),
               ],
               if (message != null) ...[
                 Text(
@@ -319,7 +395,11 @@ class _Status extends StatelessWidget {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.title, required this.subtitle, required this.onFinish});
+  const _Header({
+    required this.title,
+    required this.subtitle,
+    required this.onFinish,
+  });
 
   final String title;
   final String subtitle;
@@ -349,7 +429,12 @@ class _Header extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 2),
-                    Text(subtitle, style: AppText.caption.copyWith(color: AppColors.textOnDarkMuted)),
+                    Text(
+                      subtitle,
+                      style: AppText.caption.copyWith(
+                        color: AppColors.textOnDarkMuted,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -417,7 +502,11 @@ class _SharingPillState extends State<_SharingPill> {
           color: AppColors.danger,
         );
       case TrackingStatus.stopped:
-        return (title: 'Ubicación detenida', detail: '', color: AppColors.textSecondary);
+        return (
+          title: 'Ubicación detenida',
+          detail: '',
+          color: AppColors.textSecondary,
+        );
       case TrackingStatus.starting:
       case TrackingStatus.active:
         break;
@@ -450,7 +539,11 @@ class _SharingPillState extends State<_SharingPill> {
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(14),
         boxShadow: const [
-          BoxShadow(color: Color(0x1A000000), blurRadius: 12, offset: Offset(0, 3)),
+          BoxShadow(
+            color: Color(0x1A000000),
+            blurRadius: 12,
+            offset: Offset(0, 3),
+          ),
         ],
       ),
       child: Row(
@@ -507,9 +600,13 @@ class _BottomPanel extends StatelessWidget {
   String _stopCaption() {
     if (boardingAtNext == 0) return 'Sin alumnos pendientes en esta parada';
     if (isPickup) {
-      return boardingAtNext == 1 ? 'Sube 1 alumno' : 'Suben $boardingAtNext alumnos';
+      return boardingAtNext == 1
+          ? 'Sube 1 alumno'
+          : 'Suben $boardingAtNext alumnos';
     }
-    return boardingAtNext == 1 ? 'Baja 1 alumno' : 'Bajan $boardingAtNext alumnos';
+    return boardingAtNext == 1
+        ? 'Baja 1 alumno'
+        : 'Bajan $boardingAtNext alumnos';
   }
 
   @override
@@ -521,7 +618,13 @@ class _BottomPanel extends StatelessWidget {
       decoration: const BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
-        boxShadow: [BoxShadow(color: Color(0x14000000), blurRadius: 16, offset: Offset(0, -4))],
+        boxShadow: [
+          BoxShadow(
+            color: Color(0x14000000),
+            blurRadius: 16,
+            offset: Offset(0, -4),
+          ),
+        ],
       ),
       child: SafeArea(
         top: false,
@@ -539,18 +642,25 @@ class _BottomPanel extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          s == null ? 'Último tramo' : 'Siguiente parada, ${s.sequence} de ${s.totalStops}',
+                          s == null
+                              ? 'Último tramo'
+                              : 'Siguiente parada, ${s.sequence} de ${s.totalStops}',
                           style: AppText.caption.copyWith(fontSize: 15),
                         ),
                         const SizedBox(height: 4),
                         Text(
                           s?.name ?? destination,
-                          style: AppText.displayStyle(22, weight: FontWeight.w700),
+                          style: AppText.displayStyle(
+                            22,
+                            weight: FontWeight.w700,
+                          ),
                         ),
                         const SizedBox(height: 6),
                         Text(
                           s == null
-                              ? (isPickup ? 'Todos los alumnos van a bordo' : 'Sin más paradas')
+                              ? (isPickup
+                                    ? 'Todos los alumnos van a bordo'
+                                    : 'Sin más paradas')
                               : _stopCaption(),
                           style: AppText.bodyText.copyWith(fontSize: 16),
                         ),
@@ -564,7 +674,10 @@ class _BottomPanel extends StatelessWidget {
                         Text.rich(
                           TextSpan(
                             children: [
-                              TextSpan(text: '${s.etaMinutes}', style: AppText.displayStyle(34, height: 1)),
+                              TextSpan(
+                                text: '${s.etaMinutes}',
+                                style: AppText.displayStyle(34, height: 1),
+                              ),
                               const TextSpan(
                                 text: ' min',
                                 style: TextStyle(
@@ -577,7 +690,10 @@ class _BottomPanel extends StatelessWidget {
                             ],
                           ),
                         ),
-                        Text(s.distanceLabel ?? '', style: AppText.caption.copyWith(fontSize: 15)),
+                        Text(
+                          s.distanceLabel ?? '',
+                          style: AppText.caption.copyWith(fontSize: 15),
+                        ),
                       ],
                     ),
                 ],
@@ -585,7 +701,10 @@ class _BottomPanel extends StatelessWidget {
               const SizedBox(height: 18),
               Row(
                 children: [
-                  Text('A bordo', style: AppText.itemTitle.copyWith(fontSize: 15)),
+                  Text(
+                    'A bordo',
+                    style: AppText.itemTitle.copyWith(fontSize: 15),
+                  ),
                   const Spacer(),
                   Text('$onBoard de $totalStudents', style: AppText.bodyText),
                 ],
@@ -609,14 +728,20 @@ class _BottomPanel extends StatelessWidget {
                 Container(
                   width: double.infinity,
                   margin: const EdgeInsets.only(bottom: 12),
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
                   decoration: BoxDecoration(
                     color: AppColors.noticeBg,
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text(
                     'SOS activo · tu empresa fue avisada',
-                    style: AppText.caption.copyWith(color: AppColors.noticeText, fontSize: 15),
+                    style: AppText.caption.copyWith(
+                      color: AppColors.noticeText,
+                      fontSize: 15,
+                    ),
                   ),
                 ),
               ],

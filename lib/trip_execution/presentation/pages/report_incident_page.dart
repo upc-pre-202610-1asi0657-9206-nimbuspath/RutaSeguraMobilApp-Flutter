@@ -1,24 +1,40 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/network/api_error_message.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_card.dart';
 import '../../../core/widgets/common.dart';
+import '../../application/trip_controller.dart';
 import '../../domain/model/trip_models.dart';
 
-/// Reporte de incidente durante el viaje. Devuelve un [Incident] al enviar.
-class ReportIncidentPage extends StatefulWidget {
-  const ReportIncidentPage({super.key});
+/// Reporte de incidente durante el viaje. Lo envía al backend y devuelve un
+/// [Incident] si se aceptó.
+class ReportIncidentPage extends ConsumerStatefulWidget {
+  const ReportIncidentPage({super.key, required this.trip});
+
+  final ScheduledTrip trip;
 
   @override
-  State<ReportIncidentPage> createState() => _ReportIncidentPageState();
+  ConsumerState<ReportIncidentPage> createState() => _ReportIncidentPageState();
 }
 
-class _ReportIncidentPageState extends State<ReportIncidentPage> {
+class _ReportIncidentPageState extends ConsumerState<ReportIncidentPage> {
   IncidentType? _type;
   bool _notifyParents = true;
+  bool _sending = false;
+  String? _error;
   final _detail = TextEditingController();
+
+  String get _detailText => _detail.text.trim();
+
+  /// "Otro" exige un detalle.
+  bool get _canSend =>
+      _type != null &&
+      !_sending &&
+      (!_type!.requiresDetail || _detailText.isNotEmpty);
 
   @override
   void dispose() {
@@ -28,16 +44,37 @@ class _ReportIncidentPageState extends State<ReportIncidentPage> {
 
   void _comingSoon(String what) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$what se conectará en la siguiente fase.')),
+      SnackBar(content: Text('$what estará disponible próximamente.')),
     );
   }
 
-  void _send() {
+  Future<void> _send() async {
+    final type = _type!;
+    final detail = _detailText.isEmpty ? null : _detailText;
+    setState(() {
+      _sending = true;
+      _error = null;
+    });
+    final error = await ref
+        .read(tripControllerProvider(widget.trip).notifier)
+        .reportIncident(
+          type: type,
+          notifyGuardians: _notifyParents,
+          detail: detail,
+        );
+    if (!mounted) return;
+    if (error != null) {
+      setState(() {
+        _sending = false;
+        _error = error.userMessage;
+      });
+      return;
+    }
     Navigator.of(context).pop(
       Incident(
-        type: _type!,
+        type: type,
         at: DateTime.now(),
-        detail: _detail.text.trim().isEmpty ? null : _detail.text.trim(),
+        detail: detail,
         notifyParents: _notifyParents,
       ),
     );
@@ -45,6 +82,8 @@ class _ReportIncidentPageState extends State<ReportIncidentPage> {
 
   @override
   Widget build(BuildContext context) {
+    // Mantiene vivo el controlador del viaje mientras se envía el reporte.
+    ref.watch(tripControllerProvider(widget.trip));
     return Scaffold(
       body: SafeArea(
         child: Column(
@@ -53,7 +92,10 @@ class _ReportIncidentPageState extends State<ReportIncidentPage> {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
                 children: [
-                  const Align(alignment: Alignment.centerLeft, child: BackChevron()),
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: BackChevron(),
+                  ),
                   const SizedBox(height: 8),
                   Text('Reportar incidente', style: AppText.displayStyle(28)),
                   const SizedBox(height: 18),
@@ -76,10 +118,17 @@ class _ReportIncidentPageState extends State<ReportIncidentPage> {
                     ],
                   ),
                   const SizedBox(height: 22),
-                  Text('Detalle (opcional)', style: AppText.section),
+                  Text(
+                    _type?.requiresDetail ?? false
+                        ? 'Detalle (obligatorio)'
+                        : 'Detalle (opcional)',
+                    style: AppText.section,
+                  ),
                   const SizedBox(height: 10),
                   TextField(
                     controller: _detail,
+                    onChanged: (_) => setState(() {}),
+                    maxLength: incidentDetailMaxLength,
                     minLines: 3,
                     maxLines: 5,
                     style: AppText.bodyText.copyWith(fontSize: 16),
@@ -109,8 +158,12 @@ class _ReportIncidentPageState extends State<ReportIncidentPage> {
                   ),
                   const SizedBox(height: 18),
                   AppCard(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    onTap: () => setState(() => _notifyParents = !_notifyParents),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
+                    onTap: () =>
+                        setState(() => _notifyParents = !_notifyParents),
                     child: Row(
                       children: [
                         _NavyCheckbox(value: _notifyParents),
@@ -119,8 +172,14 @@ class _ReportIncidentPageState extends State<ReportIncidentPage> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('Avisar a los padres de la ruta', style: AppText.itemTitle.copyWith(fontSize: 17)),
-                              Text('Tu empresa siempre recibe el reporte', style: AppText.caption),
+                              Text(
+                                'Avisar a los padres de la ruta',
+                                style: AppText.itemTitle.copyWith(fontSize: 17),
+                              ),
+                              Text(
+                                'Tu empresa siempre recibe el reporte',
+                                style: AppText.caption,
+                              ),
                             ],
                           ),
                         ),
@@ -134,15 +193,32 @@ class _ReportIncidentPageState extends State<ReportIncidentPage> {
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
               child: Column(
                 children: [
+                  if (_error != null) ...[
+                    Text(
+                      _error!,
+                      textAlign: TextAlign.center,
+                      style: AppText.caption.copyWith(
+                        color: AppColors.danger,
+                        fontSize: 15,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
                   AppButton(
-                    label: _type == null ? 'Elige qué pasó para enviar' : 'Enviar reporte',
-                    icon: _type == null ? null : Icons.send_rounded,
-                    onPressed: _type == null ? null : _send,
+                    label: _sending
+                        ? 'Enviando…'
+                        : _type == null
+                        ? 'Elige qué pasó para enviar'
+                        : _type!.requiresDetail && _detailText.isEmpty
+                        ? 'Cuéntanos qué pasó para enviar'
+                        : 'Enviar reporte',
+                    icon: _canSend ? Icons.send_rounded : null,
+                    onPressed: _canSend ? _send : null,
                     height: 64,
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    'Sin señal, el reporte se envía al reconectar.',
+                    'Necesitas señal para enviar el reporte.',
                     style: AppText.caption.copyWith(fontSize: 13),
                   ),
                 ],
@@ -156,7 +232,11 @@ class _ReportIncidentPageState extends State<ReportIncidentPage> {
 }
 
 class _OptionTile extends StatelessWidget {
-  const _OptionTile({required this.label, required this.selected, required this.onTap});
+  const _OptionTile({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
 
   final String label;
   final bool selected;
@@ -215,7 +295,9 @@ class _NavyCheckbox extends StatelessWidget {
         borderRadius: BorderRadius.circular(6),
         border: Border.all(color: AppColors.navy, width: 2),
       ),
-      child: value ? const Icon(Icons.check_rounded, color: Colors.white, size: 24) : null,
+      child: value
+          ? const Icon(Icons.check_rounded, color: Colors.white, size: 24)
+          : null,
     );
   }
 }

@@ -242,3 +242,51 @@ class TripLive {
     );
   }
 }
+
+/// Resumen del viaje terminado (`GET /trips/{id}/summary`).
+class TripSummaryData {
+  const TripSummaryData({
+    required this.startedAt,
+    required this.completedAt,
+    required this.delivered,
+    required this.absent,
+    required this.incidents,
+  });
+
+  final DateTime? startedAt;
+  final DateTime? completedAt;
+
+  /// Alumnos entregados (recojo: llegaron al colegio; retorno: a casa).
+  final int delivered;
+  final List<LivePassenger> absent;
+  final List<SummaryIncident> incidents;
+
+  factory TripSummaryData.fromJson(Map<String, dynamic> j) => TripSummaryData(
+        startedAt: _date(j['startedAt']),
+        completedAt: _date(j['completedAt']),
+        delivered: (j['delivered'] as num?)?.toInt() ?? 0,
+        absent: [
+          for (final p in (j['absent'] as List?) ?? const [])
+            LivePassenger.fromJson(p as Map<String, dynamic>),
+        ],
+        incidents: [
+          for (final i in (j['incidents'] as List?) ?? const [])
+            SummaryIncident.fromJson(i as Map<String, dynamic>),
+        ],
+      );
+}
+
+class SummaryIncident {
+  const SummaryIncident({required this.type, required this.occurredAt, this.detail});
+
+  /// `HeavyTraffic`, `Accident`...
+  final String? type;
+  final DateTime? occurredAt;
+  final String? detail;
+
+  factory SummaryIncident.fromJson(Map<String, dynamic> j) => SummaryIncident(
+        type: j['type'] as String?,
+        occurredAt: _date(j['occurredAt']),
+        detail: j['detail'] as String?,
+      );
+}

@@ -17,9 +17,10 @@ class TripSummaryPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = summary;
+    final one = s.arrivedCount == 1;
     final arrivalPlace = s.trip.kind == TripKind.pickup
-        ? 'alumnos llegaron al colegio'
-        : 'alumnos llegaron a casa';
+        ? (one ? 'alumno llegó al colegio' : 'alumnos llegaron al colegio')
+        : (one ? 'alumno llegó a casa' : 'alumnos llegaron a casa');
 
     final incidentsTitle = switch (s.incidents.length) {
       0 => 'Sin incidentes',
