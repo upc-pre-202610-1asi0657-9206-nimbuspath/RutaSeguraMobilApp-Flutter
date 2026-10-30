@@ -83,8 +83,14 @@ void main() {
       expect(find.text('Enviar reporte'), findsOneWidget);
     });
 
-    testWidgets('si falla muestra el error y no cierra la pantalla', (tester) async {
-      final api = FakeTripApi()..incidentError = _offline;
+    testWidgets('si el servidor lo rechaza muestra el error y no cierra la pantalla', (tester) async {
+      final api = FakeTripApi()
+        ..incidentError = const ApiError(
+          kind: ApiErrorKind.http,
+          status: 422,
+          code: 'INCIDENT_DETAIL_REQUIRED',
+          detail: 'El detalle es obligatorio.',
+        );
       await _pump(tester, ReportIncidentPage(trip: trip), api);
 
       await tester.tap(find.text('Accidente'));
@@ -92,7 +98,7 @@ void main() {
       await tester.tap(find.text('Enviar reporte'));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('No hay conexión'), findsOneWidget);
+      expect(find.textContaining('El detalle es obligatorio'), findsOneWidget);
       expect(find.byType(ReportIncidentPage), findsOneWidget);
       expect(api.incidents, isEmpty);
     });
@@ -136,9 +142,10 @@ void main() {
       await _pump(tester, SosPage(trip: trip), api, settle: false);
 
       await countdown(tester);
-      expect(find.text('Enviando alerta'), findsOneWidget);
+      await tester.pump();
       await tester.pump(const Duration(seconds: 3));
-      expect(find.textContaining('Reintentando'), findsOneWidget);
+      expect(find.text('Alerta guardada'), findsOneWidget);
+      expect(find.textContaining('Seguimos reintentando'), findsOneWidget);
       expect(api.sosEvents, isEmpty);
 
       api.sosError = null;

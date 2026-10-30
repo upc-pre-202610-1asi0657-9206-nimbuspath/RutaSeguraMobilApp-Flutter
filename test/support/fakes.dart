@@ -11,7 +11,10 @@ import 'package:rutasegura/stakeholder/infrastructure/stakeholder_api.dart';
 import 'package:rutasegura/trip_execution/application/checklist.dart';
 import 'package:rutasegura/trip_execution/application/tracking_controller.dart';
 import 'package:rutasegura/trip_execution/application/tracking_engine.dart';
+import 'package:rutasegura/trip_execution/domain/model/queued_event.dart';
 import 'package:rutasegura/trip_execution/domain/model/tracking.dart';
+import 'package:rutasegura/trip_execution/infrastructure/offline_store.dart';
+import 'package:rutasegura/core/network/connectivity.dart';
 import 'package:rutasegura/trip_execution/domain/model/trip_live.dart';
 import 'package:rutasegura/trip_execution/domain/model/trip_models.dart';
 import 'package:rutasegura/trip_execution/infrastructure/trip_api.dart';
@@ -190,8 +193,24 @@ class FakeTripApi implements TripApi {
     if (startError != null) throw startError!;
   }
 
+  /// Error de `/live` (p. ej. sin red).
+  Object? liveError;
+
   @override
-  Future<TripLive> live(String tripId) async => liveState;
+  Future<TripLive> live(String tripId) async {
+    if (liveError != null) throw liveError!;
+    return liveState;
+  }
+
+  /// Simula que el teléfono se queda sin señal: todo falla por red.
+  void goOffline() {
+    const e = ApiError(kind: ApiErrorKind.network);
+    liveError = actionError = incidentError = sosError = syncError = positionsError = e;
+  }
+
+  void goOnline() {
+    liveError = actionError = incidentError = sosError = syncError = positionsError = null;
+  }
 
   @override
   Future<void> recordPassenger(
@@ -261,6 +280,59 @@ class FakeTripApi implements TripApi {
     final d = summaryData;
     if (d == null) throw const ApiError(kind: ApiErrorKind.network);
     return d;
+  }
+
+  /// Eventos recibidos por `/sync` (en lotes).
+  final syncBatches = <List<QueuedEvent>>[];
+
+  /// Si es un error, `/sync` falla entero (sin red).
+  Object? syncError;
+
+  /// `clientEventId` -> código de rechazo; los demás salen `Applied`.
+  final syncRejections = <String, String>{};
+
+  /// Los ya vistos salen `Duplicate`.
+  final _seen = <String>{};
+
+  @override
+  Future<List<SyncOutcome>> sync(String tripId, List<QueuedEvent> events) async {
+    if (syncError != null) throw syncError!;
+    syncBatches.add(List.of(events));
+    for (final e in events) {
+      if (syncRejections.containsKey(e.clientEventId) || _seen.contains(e.clientEventId)) continue;
+      final to = switch (e.type) {
+        QueuedEventType.boarding => PassengerStatus.boarded,
+        QueuedEventType.alighting => PassengerStatus.alighted,
+        QueuedEventType.absent => PassengerStatus.absent,
+        QueuedEventType.undo => PassengerStatus.pending,
+        _ => null,
+      };
+      if (to != null) {
+        liveState = liveState.withPassengers([
+          for (final p in liveState.passengers)
+            p.studentId == e.studentId
+                ? p.copyWith(status: to, boardedAt: e.occurredAt, clearTimes: to == PassengerStatus.pending)
+                : p,
+        ]);
+      }
+      if (e.type == QueuedEventType.sos) sosEvents.add(e.clientEventId);
+      if (e.type == QueuedEventType.incident) {
+        incidents.add('${e.incidentType}|${e.detail ?? ''}|${e.notifyGuardians}');
+      }
+    }
+    return [
+      for (final e in events)
+        if (syncRejections.containsKey(e.clientEventId))
+          SyncOutcome(
+            clientEventId: e.clientEventId,
+            status: SyncStatus.rejected,
+            errorCode: syncRejections[e.clientEventId],
+          )
+        else if (!_seen.add(e.clientEventId))
+          SyncOutcome(clientEventId: e.clientEventId, status: SyncStatus.duplicate)
+        else
+          SyncOutcome(clientEventId: e.clientEventId, status: SyncStatus.applied),
+    ];
   }
 
   /// Lotes recibidos (cada uno es la lista de lecturas enviada).
@@ -386,6 +458,7 @@ class FakeDeviceChecks implements DeviceChecks {
 
 /// Overrides para probar la app sin red.
 List<Override> fakeBackend({
+  OfflineStore? offline,
   PositionSource? gps,
   Duration flushEvery = const Duration(hours: 1),
   TokenStorage? storage,
@@ -402,6 +475,8 @@ List<Override> fakeBackend({
       rosterApiProvider.overrideWithValue(roster ?? FakeRosterApi()),
       tripApiProvider.overrideWithValue(trips ?? FakeTripApi()),
       stakeholderApiProvider.overrideWithValue(stakeholders ?? FakeStakeholderApi()),
+      offlineStoreProvider.overrideWithValue(offline ?? InMemoryOfflineStore()),
+      connectivityRestoredProvider.overrideWith((ref) => const Stream<bool>.empty()),
       deviceChecksProvider.overrideWithValue(FakeDeviceChecks()),
       positionSourceProvider.overrideWithValue(gps ?? FakePositionSource()),
       trackingFlushEveryProvider.overrideWithValue(flushEvery),

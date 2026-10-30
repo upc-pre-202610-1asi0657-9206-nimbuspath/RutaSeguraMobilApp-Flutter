@@ -210,7 +210,11 @@ class Incident {
     required this.at,
     this.detail,
     this.notifyParents = true,
+    this.queued = false,
   });
+
+  /// Sin señal: quedó guardado y se enviará al reconectar.
+  final bool queued;
 
   final IncidentType type;
   final DateTime at;

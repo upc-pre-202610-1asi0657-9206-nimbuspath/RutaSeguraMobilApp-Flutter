@@ -1,7 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rutasegura/core/network/api_error.dart';
+import 'package:rutasegura/trip_execution/application/sync_service.dart';
 import 'package:rutasegura/trip_execution/application/tracking_engine.dart';
 import 'package:rutasegura/trip_execution/domain/model/tracking.dart';
+import 'package:rutasegura/trip_execution/infrastructure/offline_store.dart';
 
 import '../support/fakes.dart';
 
@@ -9,97 +11,128 @@ const _offline = ApiError(kind: ApiErrorKind.network);
 
 Future<void> _settle() => Future<void>.delayed(Duration.zero);
 
-(TrackingEngine, FakeTripApi, FakePositionSource, List<TrackingState>) _engine({
-  FakeTripApi? api,
-  FakePositionSource? gps,
-}) {
-  final fakeApi = api ?? FakeTripApi();
-  final source = gps ?? FakePositionSource();
-  final states = <TrackingState>[];
-  final engine = TrackingEngine(
-    tripId: 't1',
-    api: fakeApi,
-    source: source,
-    onChange: states.add,
-    flushEvery: const Duration(hours: 1), // los envíos los dispara el test
-  );
-  addTearDown(engine.stop);
-  return (engine, fakeApi, source, states);
+class _Rig {
+  _Rig({FakeTripApi? api, FakePositionSource? gps, OfflineStore? store})
+      : api = api ?? FakeTripApi(),
+        gps = gps ?? FakePositionSource(),
+        store = store ?? InMemoryOfflineStore() {
+    sync = SyncService(store: this.store, api: this.api, onChange: (_) {});
+    engine = TrackingEngine(
+      tripId: 't1',
+      sync: sync,
+      source: this.gps,
+      onChange: (_) {},
+      flushEvery: const Duration(hours: 1), // los envíos los dispara el test
+    );
+  }
+
+  final FakeTripApi api;
+  final FakePositionSource gps;
+  final OfflineStore store;
+  late final SyncService sync;
+  late final TrackingEngine engine;
+
+  Future<int> get pending => store.pendingReadingCount('t1');
+}
+
+_Rig _rig({FakeTripApi? api, FakePositionSource? gps, OfflineStore? store}) {
+  final r = _Rig(api: api, gps: gps, store: store);
+  addTearDown(r.engine.stop);
+  return r;
 }
 
 void main() {
   test('descarta lecturas ruidosas y envía las buenas en orden', () async {
-    final (engine, api, gps, _) = _engine();
-    await engine.start();
+    final r = _rig();
+    await r.engine.start();
 
-    gps.emit(testReading(lat: -12.1, lon: -77.0));
-    gps.emit(testReading(accuracy: 150)); // impreciso
-    gps.emit(testReading(speedKmh: 200)); // velocidad imposible
-    gps.emit(testReading(lat: 0, lon: 0)); // (0,0)
-    gps.emit(testReading(at: DateTime.now().add(const Duration(minutes: 5)))); // futuro
-    gps.emit(testReading(lat: -12.2, lon: -77.1));
+    r.gps.emit(testReading(lat: -12.1, lon: -77.0));
+    r.gps.emit(testReading(accuracy: 150)); // impreciso
+    r.gps.emit(testReading(speedKmh: 200)); // velocidad imposible
+    r.gps.emit(testReading(lat: 0, lon: 0)); // (0,0)
+    r.gps.emit(testReading(at: DateTime.now().add(const Duration(minutes: 5)))); // futuro
+    r.gps.emit(testReading(lat: -12.2, lon: -77.1));
     await _settle();
-    expect(engine.pending, 2);
+    expect(await r.pending, 2);
 
-    await engine.flush();
+    await r.engine.flush();
 
-    expect(api.positionBatches, hasLength(1));
-    expect(api.positionBatches.single.map((r) => r.latitude), [-12.1, -12.2]);
-    expect(engine.pending, 0);
-    expect(engine.state.lastSentAt, isNotNull);
-    expect(engine.state.sent, 2);
+    expect(r.api.positionBatches, hasLength(1));
+    expect(r.api.positionBatches.single.map((x) => x.latitude), [-12.1, -12.2]);
+    expect(await r.pending, 0);
+    expect(r.engine.state.lastSentAt, isNotNull);
   });
 
   test('parte los envíos en lotes de 500', () async {
-    final (engine, api, gps, _) = _engine();
-    await engine.start();
+    final r = _rig();
+    await r.engine.start();
 
     for (var i = 0; i < 1200; i++) {
-      gps.emit(testReading(lat: -12.0 - i / 100000));
+      r.gps.emit(testReading(lat: -12.0 - i / 100000));
     }
-    await _settle();
-    await engine.flush();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    await r.engine.flush();
 
-    expect(api.positionBatches.map((b) => b.length), [500, 500, 200]);
+    expect(r.api.positionBatches.map((b) => b.length), [500, 500, 200]);
   });
 
   test('sin señal conserva las lecturas y las manda en orden al reconectar', () async {
     final api = FakeTripApi()..positionsError = _offline;
-    final (engine, _, gps, _) = _engine(api: api);
-    await engine.start();
+    final r = _rig(api: api);
+    await r.engine.start();
 
-    gps.emit(testReading(lat: -12.1));
+    r.gps.emit(testReading(lat: -12.1));
     await _settle();
-    await engine.flush();
-    expect(engine.pending, 1);
-    expect(engine.state.status, TrackingStatus.active);
+    await r.engine.flush();
+    expect(await r.pending, 1);
+    expect(r.engine.state.status, TrackingStatus.active);
 
-    gps.emit(testReading(lat: -12.2));
+    r.gps.emit(testReading(lat: -12.2));
     await _settle();
     api.positionsError = null;
-    await engine.flush();
+    await r.engine.flush();
 
-    expect(api.positionBatches.single.map((r) => r.latitude), [-12.1, -12.2]);
-    expect(engine.pending, 0);
+    expect(api.positionBatches.single.map((x) => x.latitude), [-12.1, -12.2]);
+    expect(await r.pending, 0);
   });
 
-  test('TRACKING_REQUIRES_ACTIVE_TRIP detiene el GPS de inmediato', () async {
+  test('lo guardado sobrevive a que se cierre la app', () async {
+    final store = InMemoryOfflineStore();
+    final api = FakeTripApi()..positionsError = _offline;
+    final first = _rig(api: api, store: store);
+    await first.engine.start();
+    first.gps.emit(testReading(lat: -12.1));
+    await _settle();
+    await first.engine.flush();
+    await first.engine.stop();
+
+    // "Reabre" la app: otro motor, mismo almacén, ya con señal.
+    api.positionsError = null;
+    final second = _rig(api: api, store: store);
+    await second.engine.start();
+    await second.engine.flush();
+
+    expect(api.positionBatches.single.map((x) => x.latitude), [-12.1]);
+  });
+
+  test('TRACKING_REQUIRES_ACTIVE_TRIP detiene el GPS y borra lo guardado', () async {
     final api = FakeTripApi()
       ..positionsError = const ApiError(
         kind: ApiErrorKind.http,
         status: 422,
         code: ApiErrorCodes.trackingRequiresActiveTrip,
       );
-    final (engine, _, gps, _) = _engine(api: api);
-    await engine.start();
-    expect(gps.hasListener, isTrue);
+    final r = _rig(api: api);
+    await r.engine.start();
+    expect(r.gps.hasListener, isTrue);
 
-    gps.emit(testReading());
+    r.gps.emit(testReading());
     await _settle();
-    await engine.flush();
+    await r.engine.flush();
 
-    expect(engine.state.status, TrackingStatus.stopped);
-    expect(gps.hasListener, isFalse);
+    expect(r.engine.state.status, TrackingStatus.stopped);
+    expect(r.gps.hasListener, isFalse);
+    expect(await r.pending, 0);
   });
 
   test('un 429 pausa los envíos y las lecturas siguen guardándose', () async {
@@ -109,17 +142,17 @@ void main() {
         status: 429,
         retryAfter: Duration(minutes: 1),
       );
-    final (engine, _, gps, _) = _engine(api: api);
-    await engine.start();
+    final r = _rig(api: api);
+    await r.engine.start();
 
-    gps.emit(testReading());
+    r.gps.emit(testReading());
     await _settle();
-    await engine.flush();
+    await r.engine.flush();
     api.positionsError = null;
-    await engine.flush(); // dentro de la pausa: no envía
+    await r.engine.flush(); // dentro de la pausa: no envía
 
     expect(api.positionBatches, isEmpty);
-    expect(engine.pending, 1);
+    expect(await r.pending, 1);
   });
 
   test('sin permiso o con el GPS apagado no empieza a rastrear', () async {
@@ -128,24 +161,24 @@ void main() {
       (TrackingPermission.serviceOff, TrackingStatus.serviceOff),
     ]) {
       final gps = FakePositionSource(permission: perm);
-      final (engine, _, _, _) = _engine(gps: gps);
-      await engine.start();
-      expect(engine.state.status, expected);
+      final r = _rig(gps: gps);
+      await r.engine.start();
+      expect(r.engine.state.status, expected);
       expect(gps.hasListener, isFalse);
     }
   });
 
   test('stop cancela la suscripción y deja de aceptar lecturas', () async {
-    final (engine, api, gps, _) = _engine();
-    await engine.start();
-    await engine.stop();
+    final r = _rig();
+    await r.engine.start();
+    await r.engine.stop();
 
-    gps.emit(testReading());
+    r.gps.emit(testReading());
     await _settle();
-    await engine.flush();
+    await r.engine.flush();
 
-    expect(gps.hasListener, isFalse);
-    expect(api.positionBatches, isEmpty);
+    expect(r.gps.hasListener, isFalse);
+    expect(r.api.positionBatches, isEmpty);
   });
 
   test('GpsReading.toJson sigue el contrato', () {

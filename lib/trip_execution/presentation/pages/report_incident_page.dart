@@ -55,7 +55,7 @@ class _ReportIncidentPageState extends ConsumerState<ReportIncidentPage> {
       _sending = true;
       _error = null;
     });
-    final error = await ref
+    final result = await ref
         .read(tripControllerProvider(widget.trip).notifier)
         .reportIncident(
           type: type,
@@ -63,6 +63,7 @@ class _ReportIncidentPageState extends ConsumerState<ReportIncidentPage> {
           detail: detail,
         );
     if (!mounted) return;
+    final error = result.error;
     if (error != null) {
       setState(() {
         _sending = false;
@@ -76,6 +77,7 @@ class _ReportIncidentPageState extends ConsumerState<ReportIncidentPage> {
         at: DateTime.now(),
         detail: detail,
         notifyParents: _notifyParents,
+        queued: result.queued,
       ),
     );
   }
@@ -218,7 +220,7 @@ class _ReportIncidentPageState extends ConsumerState<ReportIncidentPage> {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    'Necesitas señal para enviar el reporte.',
+                    'Sin señal, el reporte se guarda y se envía al reconectar.',
                     style: AppText.caption.copyWith(fontSize: 13),
                   ),
                 ],

@@ -21,6 +21,9 @@ extension ApiErrorMessage on ApiError {
     if (isAccountRejected) {
       return 'Comunícate con tu empresa de transporte.';
     }
+    // Reglas de negocio (422): el backend ya explica qué pasó, en español.
+    final reason = detail?.trim();
+    if (status == 422 && reason != null && reason.isNotEmpty) return reason;
     switch (status) {
       case 401:
         return 'Tu sesión venció. Inicia sesión de nuevo.';

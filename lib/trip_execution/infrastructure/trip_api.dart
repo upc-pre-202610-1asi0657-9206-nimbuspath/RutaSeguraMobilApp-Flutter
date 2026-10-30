@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/network/api_client.dart';
+import '../domain/model/queued_event.dart';
 import '../domain/model/tracking.dart';
 import '../domain/model/trip_live.dart';
 import '../domain/model/trip_models.dart';
@@ -58,6 +59,10 @@ abstract interface class TripApi {
   });
 
   Future<void> complete(String tripId, {required String clientEventId});
+
+  /// Acciones guardadas sin red (máximo [maxEventsPerSync]). El servidor las
+  /// aplica en orden de `occurredAt`, una sola vez por `clientEventId`.
+  Future<List<SyncOutcome>> sync(String tripId, List<QueuedEvent> events);
 
   Future<TripSummaryData> summary(String tripId);
 
@@ -168,6 +173,17 @@ class HttpTripApi implements TripApi {
   @override
   Future<void> complete(String tripId, {required String clientEventId}) =>
       _client.post('/trips/$tripId/complete', body: {'clientEventId': clientEventId});
+
+  @override
+  Future<List<SyncOutcome>> sync(String tripId, List<QueuedEvent> events) async {
+    final json = await _client.post('/trips/$tripId/sync', body: {
+      'events': [for (final e in events) e.toSyncJson()],
+    }) as Map<String, dynamic>;
+    return [
+      for (final o in (json['outcomes'] as List?) ?? const [])
+        SyncOutcome.fromJson(o as Map<String, dynamic>),
+    ];
+  }
 
   @override
   Future<TripSummaryData> summary(String tripId) async => TripSummaryData.fromJson(

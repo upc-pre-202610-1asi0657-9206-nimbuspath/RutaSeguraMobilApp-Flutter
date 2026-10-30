@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/network/api_error.dart';
 import '../../../core/network/api_error_message.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
@@ -28,14 +27,16 @@ class BoardingPage extends ConsumerWidget {
   Future<void> _run(
     BuildContext context,
     WidgetRef ref,
-    Future<ApiError?> Function(TripController c) action,
+    Future<ActionResult> Function(TripController c) action,
   ) async {
     final messenger = ScaffoldMessenger.of(context);
-    final error = await action(ref.read(tripControllerProvider(trip).notifier));
-    if (error != null) {
+    final result = await action(ref.read(tripControllerProvider(trip).notifier));
+    final text = result.error?.userMessage ??
+        (result.queued ? 'Sin señal: se guardó y se enviará al reconectar.' : null);
+    if (text != null) {
       messenger
         ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(error.userMessage)));
+        ..showSnackBar(SnackBar(content: Text(text)));
     }
   }
 

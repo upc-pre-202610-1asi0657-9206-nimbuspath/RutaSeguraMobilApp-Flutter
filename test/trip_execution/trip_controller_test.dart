@@ -68,7 +68,7 @@ void main() {
     final pending = ctrl.record(PassengerAction.board, 's1');
     await Future<void>.delayed(Duration.zero);
     expect(_status(c.read(provider).requireValue, 's1'), PassengerStatus.boarded);
-    expect(await pending, isNull);
+    expect((await pending).isFailure, isFalse);
 
     await ctrl.record(PassengerAction.absent, 's2');
     final ids = api.actions.map((a) => a.split(':')[2]).toSet();
@@ -84,9 +84,9 @@ void main() {
     c.listen(provider, (_, _) {});
     await c.read(provider.future);
 
-    final error = await c.read(provider.notifier).record(PassengerAction.board, 's1');
+    final result = await c.read(provider.notifier).record(PassengerAction.board, 's1');
 
-    expect(error?.code, 'PASSENGER_INVALID_TRANSITION');
+    expect(result.error?.code, 'PASSENGER_INVALID_TRANSITION');
     expect(_status(c.read(provider).requireValue, 's1'), PassengerStatus.pending);
   });
 
@@ -98,7 +98,7 @@ void main() {
     final ctrl = c.read(provider.notifier);
 
     await ctrl.record(PassengerAction.absent, 's1');
-    expect(await ctrl.undo('s1'), isNull);
+    expect((await ctrl.undo('s1')).isFailure, isFalse);
 
     expect(api.actions.last, startsWith('undo:s1:'));
     expect(_status(c.read(provider).requireValue, 's1'), PassengerStatus.pending);

@@ -14,9 +14,12 @@ import '../../../core/widgets/app_button.dart';
 import '../../../stakeholder/application/students_repository.dart';
 import '../../../stakeholder/domain/model/route_student.dart';
 import '../../application/agenda_provider.dart';
+import '../../application/sync_controller.dart';
+import '../../application/sync_service.dart';
 import '../../application/tracking_controller.dart';
 import '../../application/tracking_engine.dart';
 import '../../application/trip_controller.dart';
+import '../../domain/model/queued_event.dart';
 import '../../domain/model/trip_live.dart';
 import '../../domain/model/trip_models.dart';
 import '../widgets/trip_map.dart';
@@ -82,7 +85,11 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
     );
     if (incident == null || !mounted) return;
     setState(() => _incidents.add(incident));
-    _toast('Incidente enviado: ${incident.type.label}');
+    _toast(
+      incident.queued
+          ? 'Sin señal: el incidente quedó guardado y se enviará al reconectar'
+          : 'Incidente enviado: ${incident.type.label}',
+    );
   }
 
   void _openSos() {
@@ -228,9 +235,39 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
     );
   }
 
+  /// El servidor no aceptó una acción que estaba guardada sin red.
+  String _rejectionText(RejectedEvent r) {
+    final what = switch (r.event.type) {
+      QueuedEventType.boarding => 'la subida de un alumno',
+      QueuedEventType.alighting => 'la bajada de un alumno',
+      QueuedEventType.absent => 'una ausencia',
+      QueuedEventType.undo => 'una corrección',
+      QueuedEventType.incident => 'un incidente',
+      QueuedEventType.sos => 'un SOS',
+    };
+    final why = switch (r.errorCode) {
+      'PASSENGER_INVALID_TRANSITION' => 'el alumno ya tenía otro registro',
+      'STUDENT_NOT_IN_ROSTER' => 'el alumno ya no está en la ruta',
+      'TRIP_NOT_ACTIVE' => 'el viaje ya no está en curso',
+      'EVENT_TIMESTAMP_INVALID' => 'la hora del registro no es válida',
+      _ => 'el servidor no lo aceptó',
+    };
+    return 'No se pudo aplicar $what: $why.';
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(tripControllerProvider(widget.trip));
+    ref.listen(syncControllerProvider, (_, next) {
+      if (next.rejected.isEmpty) return;
+      final messages = [for (final r in next.rejected) _rejectionText(r)];
+      ref.read(syncControllerProvider.notifier).service.ackRejections();
+      // La lista se vuelve a pedir: refleja lo que sí quedó en el servidor.
+      ref.read(tripControllerProvider(widget.trip).notifier).refresh();
+      for (final m in messages) {
+        _toast(m);
+      }
+    });
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
@@ -296,6 +333,7 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
                         top: 16,
                         child: _SharingPill(
                           tracking: tracking,
+                          pendingEvents: ref.watch(syncControllerProvider).pendingEvents,
                           serverAgeSeconds: live.position?.ageSeconds,
                         ),
                       ),
@@ -457,9 +495,16 @@ class _Header extends StatelessWidget {
 }
 
 class _SharingPill extends StatefulWidget {
-  const _SharingPill({required this.tracking, this.serverAgeSeconds});
+  const _SharingPill({
+    required this.tracking,
+    this.pendingEvents = 0,
+    this.serverAgeSeconds,
+  });
 
   final TrackingState tracking;
+
+  /// Acciones del conductor guardadas sin enviar.
+  final int pendingEvents;
 
   /// `position.ageSeconds` de `/live`, mientras no haya un envío local.
   final int? serverAgeSeconds;
@@ -515,9 +560,13 @@ class _SharingPillState extends State<_SharingPill> {
     final age = sent != null
         ? DateTime.now().difference(sent).inSeconds
         : widget.serverAgeSeconds;
-    final stale = t.pending > 0 && (age == null || age > 30);
-    final detail = stale
-        ? 'sin señal, ${t.pending} guardadas'
+    final events = widget.pendingEvents;
+    // "Sin señal" solo si ya se había enviado algo y hace rato que no sale.
+    final stale = t.pending > 0 && age != null && age > 30;
+    final detail = events > 0
+        ? (stale ? 'sin señal, $events por enviar' : '$events por enviar')
+        : stale
+        ? 'sin señal'
         : switch (age) {
             null => 'esperando GPS',
             <= 1 => 'ahora',
@@ -526,7 +575,7 @@ class _SharingPillState extends State<_SharingPill> {
     return (
       title: 'Compartiendo ubicación',
       detail: detail,
-      color: stale ? AppColors.warning : AppColors.success,
+      color: stale || events > 0 ? AppColors.warning : AppColors.success,
     );
   }
 

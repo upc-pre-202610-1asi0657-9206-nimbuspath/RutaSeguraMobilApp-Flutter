@@ -1,7 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../infrastructure/geolocator_position_source.dart';
-import '../infrastructure/trip_api.dart';
+import 'sync_controller.dart';
 import 'tracking_engine.dart';
 
 final positionSourceProvider =
@@ -27,7 +27,7 @@ class TrackingController extends Notifier<TrackingState> {
   TrackingState build() {
     final engine = TrackingEngine(
       tripId: tripId,
-      api: ref.read(tripApiProvider),
+      sync: ref.read(syncControllerProvider.notifier).service,
       source: ref.read(positionSourceProvider),
       flushEvery: ref.read(trackingFlushEveryProvider),
       onChange: (s) {

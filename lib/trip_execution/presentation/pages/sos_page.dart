@@ -41,6 +41,9 @@ class _SosPageState extends ConsumerState<SosPage>
   int _remaining = _countdownSeconds;
   Timer? _timer;
   bool _retrying = false;
+
+  /// Sin señal: la alerta quedó guardada y `/sync` la manda al reconectar.
+  bool _queued = false;
   String? _failure;
 
   @override
@@ -76,6 +79,7 @@ class _SosPageState extends ConsumerState<SosPage>
     setState(() {
       _state = _SosState.sending;
       _retrying = false;
+      _queued = false;
       _failure = null;
     });
     final controller = ref.read(tripControllerProvider(widget.trip).notifier);
@@ -96,6 +100,14 @@ class _SosPageState extends ConsumerState<SosPage>
         return;
       }
       setState(() => _retrying = true);
+      if (!_queued) {
+        // Además de reintentar aquí, se guarda: así sale aunque el conductor
+        // cierre esta pantalla o la app.
+        _queued = true;
+        await controller.queueSos(eventId, at);
+        if (!mounted) return;
+        setState(() {});
+      }
       await Future<void>.delayed(_retryEvery);
     }
   }
@@ -117,7 +129,7 @@ class _SosPageState extends ConsumerState<SosPage>
       value: SystemUiOverlayStyle.light,
       child: PopScope(
         // No se puede salir mientras la alerta se está enviando.
-        canPop: !sending && _state != _SosState.countdown,
+        canPop: (!sending || _queued) && _state != _SosState.countdown,
         child: Scaffold(
           backgroundColor: AppColors.emergencyBg,
           body: SafeArea(
@@ -127,7 +139,8 @@ class _SosPageState extends ConsumerState<SosPage>
                 children: [
                   Align(
                     alignment: Alignment.centerLeft,
-                    child: _state == _SosState.countdown || sending
+                    child:
+                        _state == _SosState.countdown || (sending && !_queued)
                         ? const SizedBox(height: 46)
                         : const BackChevron(
                             color: Colors.white,
@@ -138,7 +151,9 @@ class _SosPageState extends ConsumerState<SosPage>
                   Text(
                     sent
                         ? 'Alerta enviada'
-                        : (sending ? 'Enviando alerta' : 'Emergencia'),
+                        : (sending
+                            ? (_queued ? 'Alerta guardada' : 'Enviando alerta')
+                            : 'Emergencia'),
                     style: AppText.displayStyle(32, color: Colors.white),
                   ),
                   const SizedBox(height: 14),
@@ -149,7 +164,7 @@ class _SosPageState extends ConsumerState<SosPage>
                           ? 'SOS activo: tu empresa fue avisada. Siguen viendo tu ubicación en vivo.'
                           : sending
                           ? (_retrying
-                                ? 'Sin conexión. Reintentando cada pocos segundos, no cierres la app.'
+                                ? 'Sin conexión. La alerta quedó guardada y se enviará apenas haya señal. Seguimos reintentando.'
                                 : 'Avisando a tu empresa…')
                           : 'Avisa de inmediato a tu empresa y a ${onBoard == 1 ? 'la familia del alumno a bordo' : 'las familias de los $onBoard alumnos a bordo'}, con tu ubicación en vivo.',
                       textAlign: TextAlign.center,
@@ -176,7 +191,7 @@ class _SosPageState extends ConsumerState<SosPage>
                         onPressed: _cancel,
                       ),
                     )
-                  else if (sent)
+                  else if (sent || (sending && _queued))
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       child: AppButton(

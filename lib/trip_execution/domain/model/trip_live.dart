@@ -4,6 +4,13 @@ library;
 
 enum PassengerStatus { pending, boarded, alighted, absent }
 
+String _passengerStatusName(PassengerStatus s) => switch (s) {
+      PassengerStatus.pending => 'Pending',
+      PassengerStatus.boarded => 'Boarded',
+      PassengerStatus.alighted => 'Alighted',
+      PassengerStatus.absent => 'Absent',
+    };
+
 PassengerStatus _passengerStatus(String? s) => switch (s) {
       'Boarded' => PassengerStatus.boarded,
       'Alighted' => PassengerStatus.alighted,
@@ -53,6 +60,16 @@ class LivePassenger {
         absenceNote: clearTimes ? null : absenceNote,
       );
 
+  Map<String, dynamic> toJson() => {
+        'studentId': studentId,
+        'stopId': stopId,
+        'status': _passengerStatusName(status),
+        'boardedAt': boardedAt?.toIso8601String(),
+        'alightedAt': alightedAt?.toIso8601String(),
+        'absenceSource': absenceSource,
+        'absenceNote': absenceNote,
+      };
+
   factory LivePassenger.fromJson(Map<String, dynamic> j) => LivePassenger(
         studentId: j['studentId'] as String,
         stopId: j['stopId'] as String?,
@@ -80,6 +97,15 @@ class LiveStop {
   final double latitude;
   final double longitude;
   final DateTime? reachedAt;
+
+  Map<String, dynamic> toJson() => {
+        'stopId': stopId,
+        'name': name,
+        'sequence': sequence,
+        'latitude': latitude,
+        'longitude': longitude,
+        'reachedAt': reachedAt?.toIso8601String(),
+      };
 
   factory LiveStop.fromJson(Map<String, dynamic> j) => LiveStop(
         stopId: j['stopId'] as String,
@@ -116,6 +142,15 @@ class NextStop {
     return '${(d / 1000).toStringAsFixed(1).replaceFirst('.', ',')} km';
   }
 
+  Map<String, dynamic> toJson() => {
+        'stopId': stopId,
+        'name': name,
+        'sequence': sequence,
+        'totalStops': totalStops,
+        'distanceMeters': distanceMeters,
+        'etaMinutes': etaMinutes,
+      };
+
   factory NextStop.fromJson(Map<String, dynamic> j) => NextStop(
         stopId: j['stopId'] as String,
         name: j['name'] as String? ?? '',
@@ -138,6 +173,13 @@ class LivePosition {
   final double longitude;
   final int? ageSeconds;
   final double? headingDegrees;
+
+  Map<String, dynamic> toJson() => {
+        'latitude': latitude,
+        'longitude': longitude,
+        'ageSeconds': ageSeconds,
+        'headingDegrees': headingDegrees,
+      };
 
   factory LivePosition.fromJson(Map<String, dynamic> j) => LivePosition(
         latitude: (j['latitude'] as num).toDouble(),
@@ -214,6 +256,21 @@ class TripLive {
         passengers: next,
         stops: stops,
       );
+
+  /// Mismo formato que el backend (para la caché del último `/live`).
+  Map<String, dynamic> toJson() => {
+        'tripId': tripId,
+        'status': status,
+        'direction': isPickup ? 'Pickup' : 'Return',
+        'startedAt': startedAt?.toIso8601String(),
+        'position': position?.toJson(),
+        'nextStop': nextStop?.toJson(),
+        'studentsOnBoard': studentsOnBoard,
+        'totalStudents': totalStudents,
+        'hasActiveSos': hasActiveSos,
+        'passengers': [for (final p in passengers) p.toJson()],
+        'stops': [for (final s in stops) s.toJson()],
+      };
 
   factory TripLive.fromJson(Map<String, dynamic> j) {
     final stops = [
