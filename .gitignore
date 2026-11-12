@@ -50,3 +50,9 @@ app.*.map.json
 # Config local con la IP de tu PC (copiar de config/device.example.json)
 config/device.json
 
+
+# Configuración local de Claude Code (permisos y directorios de cada persona)
+.claude/
+
+# Archivos pendientes de borrar, fuera del repositorio
+_to_delete/
