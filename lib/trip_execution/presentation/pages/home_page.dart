@@ -12,6 +12,7 @@ import '../../../core/widgets/common.dart';
 import '../../../iam/application/session_controller.dart';
 import '../../../stakeholder/application/students_repository.dart';
 import '../../application/agenda_provider.dart';
+import '../../application/agenda_watcher.dart';
 import '../../application/checklist.dart';
 import '../../domain/model/trip_models.dart';
 import 'active_trip_page.dart';
@@ -29,6 +30,23 @@ class HomePage extends ConsumerWidget {
   void _openTrip(BuildContext context, ScheduledTrip trip) {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => ActiveTripPage(trip: trip)),
+    );
+  }
+
+  /// La empresa canceló un viaje de la agenda.
+  void _showCancelled(BuildContext context, CancelledTrip cancelled) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Viaje cancelado'),
+        content: Text(cancelled.message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Entendido'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -64,6 +82,13 @@ class HomePage extends ConsumerWidget {
 
     ref.listen(agendaProvider, (_, next) => resume(next));
     resume(agenda);
+
+    // Mantiene la agenda al día y avisa si la empresa cancela un viaje.
+    ref.listen(agendaWatcherProvider, (_, cancelled) {
+      if (cancelled == null) return;
+      ref.read(agendaWatcherProvider.notifier).acknowledge();
+      _showCancelled(context, cancelled);
+    });
 
     return SafeArea(
       bottom: false,
@@ -104,23 +129,22 @@ class HomePage extends ConsumerWidget {
               ],
             ),
             const SizedBox(height: 18),
-            ...switch (agenda) {
-              AsyncData(:final value) => _agenda(context, value, now),
-              AsyncError(:final error) => [
-                  _Message(
-                    text: error is ApiError
-                        ? error.userMessage
-                        : 'No pudimos cargar tus viajes.',
-                    onRetry: () => ref.invalidate(agendaProvider),
-                  ),
-                ],
-              _ => const [
-                  Padding(
-                    padding: EdgeInsets.symmetric(vertical: 56),
-                    child: Center(child: CircularProgressIndicator()),
-                  ),
-                ],
-            },
+            // Con datos a la vista no se vuelve al spinner cuando la agenda se
+            // refresca sola cada 30 s: se sigue mostrando lo que hay.
+            if (agenda.hasValue)
+              ..._agenda(context, agenda.requireValue, now)
+            else if (agenda.hasError)
+              _Message(
+                text: agenda.error is ApiError
+                    ? (agenda.error as ApiError).userMessage
+                    : 'No pudimos cargar tus viajes.',
+                onRetry: () => ref.invalidate(agendaProvider),
+              )
+            else
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 56),
+                child: Center(child: CircularProgressIndicator()),
+              ),
             const SectionTitle('Antes de salir'),
             const _Checklist(),
             const SizedBox(height: 22),

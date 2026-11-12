@@ -9,21 +9,6 @@ import 'package:rutasegura/trip_execution/presentation/pages/active_trip_page.da
 
 import '../support/fakes.dart';
 
-/// El mismo estado en vivo pero con otro `status`.
-TripLive _withStatus(TripLive l, String status) => TripLive(
-      tripId: l.tripId,
-      status: status,
-      isPickup: l.isPickup,
-      startedAt: l.startedAt,
-      position: l.position,
-      nextStop: l.nextStop,
-      studentsOnBoard: l.studentsOnBoard,
-      totalStudents: l.totalStudents,
-      hasActiveSos: l.hasActiveSos,
-      passengers: l.passengers,
-      stops: l.stops,
-    );
-
 void main() {
   final trip = testTrip(status: 'InProgress');
 
@@ -147,7 +132,7 @@ void main() {
 
       realtime.emit(const RealtimeStatusChanged(status: 'Cancelled', reason: 'Paro'));
       await pumpEventQueue();
-      api.liveState = _withStatus(api.liveState, 'Cancelled');
+      api.liveState = liveWithStatus(api.liveState, 'Cancelled');
       await ctrl.refresh();
 
       expect(notices, hasLength(1));
@@ -156,7 +141,7 @@ void main() {
     test('sin canal, /live que pasa a Cancelled también avisa', () async {
       final ctrl = await open();
 
-      api.liveState = _withStatus(api.liveState, 'Cancelled');
+      api.liveState = liveWithStatus(api.liveState, 'Cancelled');
       await ctrl.refresh();
 
       expect(notices, hasLength(1));
@@ -227,7 +212,7 @@ void main() {
     testWidgets('una cancelación muestra un aviso con el motivo', (tester) async {
       final (api, realtime, _) = await pump(tester);
 
-      api.liveState = _withStatus(api.liveState, 'Cancelled');
+      api.liveState = liveWithStatus(api.liveState, 'Cancelled');
       realtime.emit(const RealtimeStatusChanged(status: 'Cancelled', reason: 'Paro de transportes'));
       await tester.pumpAndSettle();
 

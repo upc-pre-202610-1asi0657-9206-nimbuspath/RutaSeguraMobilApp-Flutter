@@ -460,23 +460,47 @@ class FakeDeviceChecks implements DeviceChecks {
       );
 }
 
-/// Canal en tiempo real simulado: `emit` hace llegar un evento como si lo
-/// mandara el hub.
+/// Canal en tiempo real simulado, uno por viaje: `emit` hace llegar un evento
+/// como si lo mandara el hub.
 class FakeTripRealtime implements TripRealtime {
-  final _controller = StreamController<RealtimeEvent>.broadcast();
+  final _controllers = <String, StreamController<RealtimeEvent>>{};
 
-  /// Viajes a los que se pidió suscribirse.
+  /// Viajes a los que se pidió suscribirse (uno por llamada a `watch`).
   final watched = <String>[];
-  bool get hasListener => _controller.hasListener;
 
-  void emit(RealtimeEvent e) => _controller.add(e);
+  bool get hasListener => _controllers.values.any((c) => c.hasListener);
+  bool isWatching(String tripId) => _controllers[tripId]?.hasListener ?? false;
+
+  /// Sin [tripId] llega a todos los viajes que se están escuchando.
+  void emit(RealtimeEvent e, {String? tripId}) {
+    for (final entry in _controllers.entries) {
+      if ((tripId == null || entry.key == tripId) && entry.value.hasListener) {
+        entry.value.add(e);
+      }
+    }
+  }
 
   @override
   Stream<RealtimeEvent> watch(String tripId) {
     watched.add(tripId);
-    return _controller.stream;
+    return (_controllers[tripId] ??= StreamController<RealtimeEvent>.broadcast()).stream;
   }
 }
+
+/// El mismo estado en vivo pero con otro `status` (p. ej. `Cancelled`).
+TripLive liveWithStatus(TripLive l, String status) => TripLive(
+      tripId: l.tripId,
+      status: status,
+      isPickup: l.isPickup,
+      startedAt: l.startedAt,
+      position: l.position,
+      nextStop: l.nextStop,
+      studentsOnBoard: l.studentsOnBoard,
+      totalStudents: l.totalStudents,
+      hasActiveSos: l.hasActiveSos,
+      passengers: l.passengers,
+      stops: l.stops,
+    );
 
 /// Overrides para probar la app sin red.
 List<Override> fakeBackend({
