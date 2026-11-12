@@ -15,6 +15,8 @@ import 'package:rutasegura/trip_execution/domain/model/queued_event.dart';
 import 'package:rutasegura/trip_execution/domain/model/tracking.dart';
 import 'package:rutasegura/trip_execution/infrastructure/offline_store.dart';
 import 'package:rutasegura/core/network/connectivity.dart';
+import 'package:rutasegura/core/permissions/notification_permission.dart';
+import 'package:rutasegura/trip_execution/infrastructure/trip_realtime.dart';
 import 'package:rutasegura/trip_execution/domain/model/trip_live.dart';
 import 'package:rutasegura/trip_execution/domain/model/trip_models.dart';
 import 'package:rutasegura/trip_execution/infrastructure/trip_api.dart';
@@ -195,9 +197,11 @@ class FakeTripApi implements TripApi {
 
   /// Error de `/live` (p. ej. sin red).
   Object? liveError;
+  int liveCalls = 0;
 
   @override
   Future<TripLive> live(String tripId) async {
+    liveCalls++;
     if (liveError != null) throw liveError!;
     return liveState;
   }
@@ -456,8 +460,28 @@ class FakeDeviceChecks implements DeviceChecks {
       );
 }
 
+/// Canal en tiempo real simulado: `emit` hace llegar un evento como si lo
+/// mandara el hub.
+class FakeTripRealtime implements TripRealtime {
+  final _controller = StreamController<RealtimeEvent>.broadcast();
+
+  /// Viajes a los que se pidió suscribirse.
+  final watched = <String>[];
+  bool get hasListener => _controller.hasListener;
+
+  void emit(RealtimeEvent e) => _controller.add(e);
+
+  @override
+  Stream<RealtimeEvent> watch(String tripId) {
+    watched.add(tripId);
+    return _controller.stream;
+  }
+}
+
 /// Overrides para probar la app sin red.
 List<Override> fakeBackend({
+  TripRealtime? realtime,
+  RequestNotificationPermission? notificationPermission,
   OfflineStore? offline,
   PositionSource? gps,
   Duration flushEvery = const Duration(hours: 1),
@@ -474,6 +498,9 @@ List<Override> fakeBackend({
       iamApiProvider.overrideWithValue(iam ?? FakeIamApi()),
       rosterApiProvider.overrideWithValue(roster ?? FakeRosterApi()),
       tripApiProvider.overrideWithValue(trips ?? FakeTripApi()),
+      tripRealtimeProvider.overrideWithValue(realtime ?? FakeTripRealtime()),
+      notificationPermissionProvider
+          .overrideWithValue(notificationPermission ?? () async {}),
       stakeholderApiProvider.overrideWithValue(stakeholders ?? FakeStakeholderApi()),
       offlineStoreProvider.overrideWithValue(offline ?? InMemoryOfflineStore()),
       connectivityRestoredProvider.overrideWith((ref) => const Stream<bool>.empty()),

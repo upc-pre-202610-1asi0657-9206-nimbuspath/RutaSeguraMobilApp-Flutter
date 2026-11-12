@@ -11,8 +11,10 @@ import '../../core/storage/local_cache.dart';
 import '../domain/model/queued_event.dart';
 import '../domain/model/trip_live.dart';
 import '../domain/model/trip_models.dart';
+import '../domain/model/trip_notice.dart';
 import '../infrastructure/offline_store.dart';
 import '../infrastructure/trip_api.dart';
+import '../infrastructure/trip_realtime.dart';
 import 'sync_controller.dart';
 import 'sync_service.dart';
 
@@ -34,6 +36,26 @@ final positionReaderProvider = Provider<PositionReader>((ref) => () async {
 const liveRefreshEvery = Duration(seconds: 20);
 
 const _uuid = Uuid();
+
+/// Último aviso de la empresa sobre el viaje [tripId] que la pantalla aún no
+/// mostró. No se libera solo: el aviso puede llegar cuando la pantalla no está
+/// mirando, y debe seguir ahí al volver.
+class TripNoticeNotifier extends Notifier<TripNotice?> {
+  TripNoticeNotifier(this.tripId);
+
+  final String tripId;
+
+  @override
+  TripNotice? build() => null;
+
+  void post(TripNotice notice) => state = notice;
+  void clear() => state = null;
+}
+
+final tripNoticeProvider =
+    NotifierProvider.family<TripNoticeNotifier, TripNotice?, String>(
+  TripNoticeNotifier.new,
+);
 
 /// Qué pasó con una acción del conductor.
 ///
@@ -75,7 +97,12 @@ class TripController extends AsyncNotifier<TripLive> {
   late OfflineStore _store;
   late LocalCache _cache;
   late PositionReader _readPosition;
+  late TripNoticeNotifier _notices;
   String get _liveKey => 'live.${trip.id}';
+
+  // La cancelación se avisa una sola vez, llegue por el canal en tiempo real
+  // o por `/live`, lo que ocurra primero.
+  bool _cancelNotified = false;
 
   @override
   Future<TripLive> build() {
@@ -84,13 +111,52 @@ class TripController extends AsyncNotifier<TripLive> {
     _store = ref.read(offlineStoreProvider);
     _cache = ref.read(localCacheProvider);
     _readPosition = ref.read(positionReaderProvider);
+    _notices = ref.read(tripNoticeProvider(trip.id).notifier);
     final timer = Timer.periodic(liveRefreshEvery, (_) => refresh());
     ref.onDispose(timer.cancel);
+    // El canal en tiempo real avisa al instante; el refresco periódico de
+    // arriba queda como respaldo si no hay conexión con el hub.
+    final realtime = ref
+        .read(tripRealtimeProvider)
+        .watch(trip.id)
+        .listen(_onRealtime, onError: (_) {});
+    ref.onDispose(realtime.cancel);
     // Al volver la conexión se manda lo guardado sin esperar al ciclo.
     ref.listen(connectivityRestoredProvider, (_, next) {
       if (next.value == true) refresh();
     });
     return _startAndLoad();
+  }
+
+  void _onRealtime(RealtimeEvent event) {
+    if (!ref.mounted) return;
+    switch (event) {
+      case RealtimeConnected():
+        // Pudo cambiar algo mientras el canal estuvo caído.
+        refresh();
+      case RealtimeStatusChanged(:final status, :final reason):
+        if (status == 'Cancelled') _notifyCancelled(reason);
+        refresh();
+    }
+  }
+
+  void _notifyCancelled(String? reason) {
+    if (_cancelNotified) return;
+    _cancelNotified = true;
+    _notices.post(TripNotice(TripNoticeKind.tripCancelled, reason: reason));
+  }
+
+  /// Compara el estado que se veía con el que acaba de llegar de `/live` y
+  /// avisa de lo que cambió por decisión de la empresa. El canal en tiempo
+  /// real no informa del cierre de un SOS, por eso se detecta aquí.
+  void _detectNotices(TripLive? before, TripLive after) {
+    if (before == null) return;
+    if (before.hasActiveSos && !after.hasActiveSos) {
+      _notices.post(const TripNotice(TripNoticeKind.sosResolved));
+    }
+    if (before.status != 'Cancelled' && after.status == 'Cancelled') {
+      _notifyCancelled(null);
+    }
   }
 
   bool _looksOffline(ApiError e) =>
@@ -180,7 +246,10 @@ class TripController extends AsyncNotifier<TripLive> {
       if (!ref.mounted) return;
       unawaited(_cache.write(_liveKey, jsonEncode(live.toJson())));
       final shown = await _overlay(live);
-      if (_inFlight == 0 && ref.mounted) state = AsyncData(shown);
+      if (_inFlight == 0 && ref.mounted) {
+        _detectNotices(state.value, shown);
+        state = AsyncData(shown);
+      }
     } on ApiError {
       // Sin señal: se queda con el último estado.
     }

@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/network/api_error.dart';
 import '../../../core/network/api_error_message.dart';
+import '../../../core/permissions/notification_permission.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/utils/date_format.dart';
@@ -22,6 +23,7 @@ import '../../application/trip_controller.dart';
 import '../../domain/model/queued_event.dart';
 import '../../domain/model/trip_live.dart';
 import '../../domain/model/trip_models.dart';
+import '../../domain/model/trip_notice.dart';
 import '../widgets/trip_map.dart';
 import 'boarding_page.dart';
 import 'report_incident_page.dart';
@@ -54,6 +56,11 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Android 13+: sin este permiso no se ve la notificación del GPS. Se pide
+    // al abrir el viaje, que es cuando el conductor entiende para qué sirve.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(ref.read(notificationPermissionProvider)());
+    });
   }
 
   @override
@@ -72,6 +79,37 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
 
   void _toast(String text) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+
+  /// Aviso de la empresa (cancelación, SOS resuelto).
+  Future<void> _showNotice(TripNotice notice) async {
+    if (!mounted) return;
+    switch (notice.kind) {
+      case TripNoticeKind.sosResolved:
+        _toast(notice.message);
+      case TripNoticeKind.tripCancelled:
+        await showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => PopScope(
+            canPop: false,
+            child: AlertDialog(
+              title: const Text('Viaje cancelado'),
+              content: Text(notice.message),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Entendido'),
+                ),
+              ],
+            ),
+          ),
+        );
+        if (!mounted) return;
+        // Ya no hay viaje que operar: se vuelve a Inicio con la agenda al día.
+        ref.invalidate(agendaProvider);
+        Navigator.of(context).popUntil((r) => r.isFirst);
+    }
+  }
 
   Future<void> _openBoarding() async {
     await Navigator.of(context).push<void>(
@@ -258,6 +296,11 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(tripControllerProvider(widget.trip));
+    ref.listen(tripNoticeProvider(widget.trip.id), (_, notice) {
+      if (notice == null) return;
+      ref.read(tripNoticeProvider(widget.trip.id).notifier).clear();
+      _showNotice(notice);
+    });
     ref.listen(syncControllerProvider, (_, next) {
       if (next.rejected.isEmpty) return;
       final messages = [for (final r in next.rejected) _rejectionText(r)];
