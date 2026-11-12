@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -29,27 +30,45 @@ class _TripMapState extends State<TripMap> {
         if (_live.position case final p?) LatLng(p.latitude, p.longitude),
       ];
 
-  /// Encuadra el recorrido una vez por viaje y otra cuando aparece el
-  /// vehículo (sin pelear con el gesto del conductor en cada refresco).
-  void _fit() {
+  /// Cambia cuando hay que volver a encuadrar: un viaje distinto o la primera
+  /// vez que aparece el vehículo.
+  String get _fitKey => '${_live.tripId}/${_live.position != null}';
+
+  /// Encuadre del recorrido (paradas y vehículo); `null` si aún no hay puntos.
+  CameraFit? get _cameraFit {
     final pts = _points;
-    final key = '${_live.tripId}/${_live.position != null}';
-    if (!_ready || pts.isEmpty || _fittedFor == key) return;
-    _fittedFor = key;
-    _controller.fitCamera(
-      CameraFit.coordinates(
-        coordinates: pts,
-        // El panel inferior tapa parte del mapa.
-        padding: const EdgeInsets.fromLTRB(50, 110, 50, 330),
-        maxZoom: 17,
-      ),
+    if (pts.isEmpty) return null;
+    return CameraFit.coordinates(
+      coordinates: pts,
+      // Arriba queda la píldora "Compartiendo ubicación" y abajo el panel: las
+      // paradas (de 38 de alto) deben quedar enteras entre ambos.
+      padding: const EdgeInsets.fromLTRB(50, 120, 50, 370),
+      maxZoom: 17,
     );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    // El primer encuadre va en las opciones del mapa (`initialCameraFit`):
+    // así se calcula con el tamaño real. Hacerlo en `onMapReady` encuadraba
+    // con el mapa todavía sin medir y dejaba la vista de todo el mundo.
+    _fittedFor = _fitKey;
+  }
+
+  /// Vuelve a encuadrar una vez por viaje y otra cuando aparece el vehículo
+  /// (sin pelear con el gesto del conductor en cada refresco).
+  void _refit() {
+    final fit = _cameraFit;
+    if (!_ready || fit == null || _fittedFor == _fitKey) return;
+    _fittedFor = _fitKey;
+    _controller.fitCamera(fit);
   }
 
   @override
   void didUpdateWidget(TripMap old) {
     super.didUpdateWidget(old);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _fit());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refit());
   }
 
   @override
@@ -71,18 +90,20 @@ class _TripMapState extends State<TripMap> {
         // Lima por defecto hasta que lleguen las paradas.
         initialCenter: first ?? const LatLng(-12.0464, -77.0428),
         initialZoom: 14,
+        initialCameraFit: _cameraFit,
         interactionOptions: const InteractionOptions(
           flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
         ),
-        onMapReady: () {
-          _ready = true;
-          _fit();
-        },
+        onMapReady: () => _ready = true,
       ),
       children: [
         TileLayer(
           urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
           userAgentPackageName: 'com.example.rutasegura',
+          // Los fallos de teselas son silenciosos: en desarrollo se registran.
+          errorTileCallback: kDebugMode
+              ? (tile, error, _) => debugPrint('Mapa: tesela ${tile.coordinates} falló: $error')
+              : null,
         ),
         // Unión recta entre paradas (aproximada: no sigue las calles).
         if (_live.stops.length > 1)
@@ -120,9 +141,19 @@ class _TripMapState extends State<TripMap> {
               ),
           ],
         ),
-        const SimpleAttributionWidget(
-          source: Text('© OpenStreetMap'),
-          alignment: Alignment.topRight,
+        // Debajo de la píldora "Compartiendo ubicación", que si no la tapa. El
+        // widget trae su propio SafeArea: sin quitar el inset de arriba sumaría
+        // el alto de la barra de estado aunque el mapa ya empiece más abajo.
+        MediaQuery.removePadding(
+          context: context,
+          removeTop: true,
+          child: const Padding(
+            padding: EdgeInsets.only(top: 70),
+            child: SimpleAttributionWidget(
+              source: Text('OpenStreetMap'),
+              alignment: Alignment.topRight,
+            ),
+          ),
         ),
       ],
     );
