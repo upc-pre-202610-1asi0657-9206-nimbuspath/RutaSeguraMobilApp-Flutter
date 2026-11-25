@@ -56,3 +56,6 @@ config/device.json
 
 # Archivos pendientes de borrar, fuera del repositorio
 _to_delete/
+
+# Android build outputs
+/android/build/
