@@ -127,6 +127,17 @@ void main() {
       expect(api.liveCalls, greaterThan(before));
     });
 
+    test('una posición en tiempo real refresca un viaje retrasado', () async {
+      await open(live: liveWithStatus(testLive(), 'Delayed'));
+      final before = api.liveCalls;
+
+      realtime.emit(const RealtimePositionChanged());
+      realtime.emit(const RealtimePositionChanged());
+      await pumpEventQueue();
+
+      expect(api.liveCalls, before + 1);
+    });
+
     test('la cancelación se avisa una sola vez aunque llegue por dos vías', () async {
       final ctrl = await open();
 

@@ -24,6 +24,8 @@ abstract interface class TripApi {
 
   Future<TripLive> live(String tripId);
 
+  Future<Map<String, dynamic>> operationalDetails(String tripId);
+
   Future<void> recordPassenger(
     String tripId,
     PassengerAction action, {
@@ -91,6 +93,11 @@ class HttpTripApi implements TripApi {
   Future<TripLive> live(String tripId) async => TripLive.fromJson(
         await _client.get('/trips/$tripId/live') as Map<String, dynamic>,
       );
+
+  @override
+  Future<Map<String, dynamic>> operationalDetails(String tripId) async =>
+      await _client.get('/trips/$tripId/operational-details')
+          as Map<String, dynamic>;
 
   @override
   Future<void> recordPassenger(

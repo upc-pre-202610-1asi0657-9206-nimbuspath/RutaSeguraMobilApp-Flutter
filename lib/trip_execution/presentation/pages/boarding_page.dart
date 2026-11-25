@@ -9,20 +9,47 @@ import '../../../core/widgets/common.dart';
 import '../../../stakeholder/application/students_repository.dart';
 import '../../../stakeholder/domain/model/route_student.dart';
 import '../../application/trip_controller.dart';
+import '../../application/trip_operational_details.dart';
 import '../../domain/model/trip_live.dart';
 import '../../domain/model/trip_models.dart';
 import '../../infrastructure/trip_api.dart';
 import '../widgets/student_avatar.dart';
 import '../widgets/student_boarding_card.dart';
 
-/// Registro de abordaje (o descenso) de los alumnos de la siguiente parada.
+/// Registro de asistencia, con acceso a todo el padrón del viaje.
 ///
 /// Cada toque se aplica al instante y se envía al servidor con su propio
 /// `clientEventId`; si el servidor lo rechaza, la fila vuelve a su estado.
-class BoardingPage extends ConsumerWidget {
+class BoardingPage extends ConsumerStatefulWidget {
   const BoardingPage({super.key, required this.trip});
 
   final ScheduledTrip trip;
+
+  @override
+  ConsumerState<BoardingPage> createState() => _BoardingPageState();
+}
+
+class _BoardingPageState extends ConsumerState<BoardingPage> {
+  bool _showAll = false;
+
+  Future<void> _recordDropoff(TripLive live, LivePassenger passenger, String? name) async {
+    if (!live.canAlightAtCurrentOrReachedStop(passenger)) {
+      final stop = live.stop(passenger.stopId)?.name ?? 'la parada asignada';
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialog) => AlertDialog(
+          title: const Text('Confirmar bajada'),
+          content: Text('Confirma que ${name ?? 'este alumno'} bajó en $stop.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialog, false), child: const Text('Volver')),
+            TextButton(onPressed: () => Navigator.pop(dialog, true), child: const Text('Confirmar bajada')),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    await _run(context, ref, (c) => c.record(PassengerAction.alight, passenger.studentId));
+  }
 
   Future<void> _run(
     BuildContext context,
@@ -30,9 +57,14 @@ class BoardingPage extends ConsumerWidget {
     Future<ActionResult> Function(TripController c) action,
   ) async {
     final messenger = ScaffoldMessenger.of(context);
-    final result = await action(ref.read(tripControllerProvider(trip).notifier));
-    final text = result.error?.userMessage ??
-        (result.queued ? 'Sin señal: se guardó y se enviará al reconectar.' : null);
+    final result = await action(
+      ref.read(tripControllerProvider(widget.trip).notifier),
+    );
+    final text =
+        result.error?.userMessage ??
+        (result.queued
+            ? 'Sin señal: se guardó y se enviará al reconectar.'
+            : null);
     if (text != null) {
       messenger
         ..hideCurrentSnackBar()
@@ -41,24 +73,36 @@ class BoardingPage extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final live = ref.watch(tripControllerProvider(trip)).value;
+  Widget build(BuildContext context) {
+    final live = ref.watch(tripControllerProvider(widget.trip)).value;
     final students = {
-      for (final s in ref.watch(studentsProvider).value ?? const <RouteStudent>[])
+      for (final s
+          in ref.watch(studentsProvider).value ?? const <RouteStudent>[])
         s.studentId: s,
     };
     if (live == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    // Parada actual: la siguiente. Sin ella (última parada), lo pendiente.
+    final detailsProvider = tripOperationalDetailsProvider(
+      tripDetailsKey(live),
+    );
+    final details = ref.watch(detailsProvider);
     final next = live.nextStop;
-    final passengers = next == null
-        ? [for (final p in live.passengers) if (p.status == PassengerStatus.pending) p]
-        : live.passengersAt(next.stopId);
-    final pending = passengers.where((p) => p.status == PassengerStatus.pending).length;
+    final passengers =
+        (_showAll ? live.passengers : live.attendancePassengers).toList()..sort(
+          (a, b) => (a.status == PassengerStatus.pending ? 0 : 1).compareTo(
+            b.status == PassengerStatus.pending ? 0 : 1,
+          ),
+        );
+    final pending = passengers
+        .where((p) => p.status == PassengerStatus.pending)
+        .length;
     final isPickup = live.isPickup;
-    final movement = isPickup ? 'subida' : 'bajada';
+    final boardingAtSchool = !isPickup && pending > 0;
+    final dropoffs = passengers
+        .where(live.canAlightAtCurrentOrReachedStop)
+        .length;
 
     return Scaffold(
       body: SafeArea(
@@ -75,18 +119,41 @@ class BoardingPage extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    next == null
+                    boardingAtSchool
+                        ? 'Abordaje de retorno'
+                        : next == null
                         ? 'Alumnos por registrar'
-                        : 'Parada ${next.sequence} de ${next.totalStops}, $movement',
+                        : 'Parada ${next.sequence} de ${next.totalStops}, ${isPickup ? 'subida' : 'bajada'}',
                     style: AppText.caption.copyWith(fontSize: 15),
                   ),
                   const SizedBox(height: 4),
-                  Text(next?.name ?? trip.destination, style: AppText.displayStyle(26)),
+                  Text(
+                    boardingAtSchool
+                        ? (live.stops.firstOrNull?.name ?? 'Colegio')
+                        : next?.name ?? widget.trip.destination,
+                    style: AppText.displayStyle(26),
+                  ),
                   const SizedBox(height: 6),
                   Text(
                     'Cada registro guarda la hora y tu ubicación.',
                     style: AppText.caption.copyWith(fontSize: 15),
                   ),
+                  if (passengers.length != live.passengers.length || _showAll)
+                    TextButton(
+                      onPressed: () => setState(() => _showAll = !_showAll),
+                      child: Text(
+                        _showAll
+                            ? 'Ver asistencia de la parada'
+                            : 'Ver todo el padrón',
+                      ),
+                    ),
+                  if (details.hasError)
+                    TextButton(
+                      onPressed: () => ref.invalidate(detailsProvider),
+                      child: const Text(
+                        'No pudimos consultar el padrón. Reintentar',
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -106,39 +173,64 @@ class BoardingPage extends ConsumerWidget {
                       itemBuilder: (_, i) {
                         final p = passengers[i];
                         final info = students[p.studentId];
+                        final name =
+                            details.value?.names[p.studentId] ?? info?.fullName;
+                        final stop = live.stop(p.stopId);
+                        final stopLabel =
+                            !isPickup && p.status == PassengerStatus.pending
+                            ? 'Sube en el colegio'
+                            : _showAll || p.stopId != next?.stopId
+                            ? stop?.name ?? ''
+                            : '';
                         final id = p.studentId;
                         return StudentBoardingCard(
                           record: BoardingRecord(
                             student: Student(
                               id: id,
-                              fullName: info?.fullName ?? 'Alumno sin ficha',
-                              grade: info?.schoolGrade ?? '',
+                              fullName:
+                                  name ??
+                                  (details.isLoading
+                                      ? 'Cargando nombre…'
+                                      : 'Nombre no disponible'),
+                              grade: [
+                                info?.schoolGrade ?? '',
+                                stopLabel,
+                              ].where((value) => value.isNotEmpty).join(' · '),
                               guardianNotice: p.absentByGuardian
                                   ? (p.absenceNote?.isNotEmpty ?? false
-                                      ? 'Su apoderado avisó que hoy no asiste: ${p.absenceNote}'
-                                      : 'Su apoderado avisó que hoy no asiste.')
+                                        ? 'Su apoderado avisó que hoy no asiste: ${p.absenceNote}'
+                                        : 'Su apoderado avisó que hoy no asiste.')
                                   : null,
                             ),
                             status: switch (p.status) {
                               PassengerStatus.pending => BoardingStatus.pending,
                               PassengerStatus.boarded => BoardingStatus.boarded,
-                              PassengerStatus.alighted => BoardingStatus.alighted,
+                              PassengerStatus.alighted =>
+                                BoardingStatus.alighted,
                               PassengerStatus.absent => BoardingStatus.absent,
                             },
-                            at: p.alightedAt?.toLocal() ?? p.boardedAt?.toLocal(),
+                            at:
+                                p.alightedAt?.toLocal() ??
+                                p.boardedAt?.toLocal(),
                           ),
                           avatar: info == null
                               ? null
                               : StudentAvatar(student: info),
-                          onBoarded: () => _run(context, ref,
-                              (c) => c.record(PassengerAction.board, id)),
-                          onAbsent: () => _run(context, ref,
-                              (c) => c.record(PassengerAction.absent, id)),
+                          onBoarded: () => _run(
+                            context,
+                            ref,
+                            (c) => c.record(PassengerAction.board, id),
+                          ),
+                          onAbsent: () => _run(
+                            context,
+                            ref,
+                            (c) => c.record(PassengerAction.absent, id),
+                          ),
                           onUndo: () => _run(context, ref, (c) => c.undo(id)),
-                          onAlighted: isPickup
+                          onAlighted: !live.canAlightAtCurrentOrReachedStop(p) &&
+                                  !(_showAll && !isPickup && p.status == PassengerStatus.boarded)
                               ? null
-                              : () => _run(context, ref,
-                                  (c) => c.record(PassengerAction.alight, id)),
+                              : () => _recordDropoff(live, p, name),
                         );
                       },
                     ),
@@ -152,9 +244,13 @@ class BoardingPage extends ConsumerWidget {
               child: AppButton(
                 label: pending > 0
                     ? 'Faltan registrar $pending ${pending == 1 ? 'alumno' : 'alumnos'}'
+                    : dropoffs > 0
+                    ? 'Faltan registrar $dropoffs bajadas'
                     : 'Confirmar parada',
-                icon: pending > 0 ? null : Icons.check_rounded,
-                onPressed: pending > 0 ? null : () => Navigator.of(context).pop(),
+                icon: pending > 0 || dropoffs > 0 ? null : Icons.check_rounded,
+                onPressed: pending > 0 || dropoffs > 0
+                    ? null
+                    : () => Navigator.of(context).pop(),
               ),
             ),
           ],

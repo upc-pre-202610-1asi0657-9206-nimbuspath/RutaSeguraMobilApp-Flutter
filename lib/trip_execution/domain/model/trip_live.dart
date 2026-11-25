@@ -189,6 +189,42 @@ class LivePosition {
       );
 }
 
+typedef ItineraryPoint = ({double latitude, double longitude});
+
+class TripOperationalDetails {
+  const TripOperationalDetails(this.names, this.itinerary);
+
+  final Map<String, String> names;
+  final List<ItineraryPoint> itinerary;
+
+  factory TripOperationalDetails.fromJson(Map<String, dynamic> json) {
+    final geometry = (json['itinerary'] as Map?)?['geometry'] as Map?;
+    final coordinates = geometry?['type'] == 'LineString'
+        ? (geometry!['coordinates'] as List?)
+        : null;
+    return TripOperationalDetails(
+      {
+        for (final student in (json['students'] as List?) ?? const [])
+          if (student is Map &&
+              student['studentId'] is String &&
+              student['fullName'] is String)
+            student['studentId'] as String: student['fullName'] as String,
+      },
+      [
+        for (final point in coordinates ?? const [])
+          if (point is List &&
+              point.length == 2 &&
+              point[0] is num &&
+              point[1] is num)
+            (
+              latitude: (point[1] as num).toDouble(),
+              longitude: (point[0] as num).toDouble(),
+            ),
+      ],
+    );
+  }
+}
+
 class TripLive {
   const TripLive({
     required this.tripId,
@@ -202,6 +238,7 @@ class TripLive {
     this.position,
     this.nextStop,
     this.hasActiveSos = false,
+    this.plannedItinerary = const [],
   });
 
   final String tripId;
@@ -217,6 +254,7 @@ class TripLive {
   final bool hasActiveSos;
   final List<LivePassenger> passengers;
   final List<LiveStop> stops;
+  final List<ItineraryPoint> plannedItinerary;
 
   bool get isActive => status == 'InProgress' || status == 'Delayed';
 
@@ -224,15 +262,39 @@ class TripLive {
   int get pendingCount =>
       passengers.where((p) => p.status == PassengerStatus.pending).length;
 
-  List<LivePassenger> passengersAt(String? stopId) =>
-      [for (final p in passengers) if (p.stopId == stopId) p];
+  List<LivePassenger> passengersAt(String? stopId) => [
+    for (final p in passengers)
+      if (p.stopId == stopId) p,
+  ];
 
   /// "Suben N alumnos": pendientes de la siguiente parada.
   int get boardingAtNextStop => nextStop == null
       ? 0
       : passengersAt(nextStop!.stopId)
-          .where((p) => p.status == PassengerStatus.pending)
-          .length;
+            .where((p) => p.status == PassengerStatus.pending)
+            .length;
+
+  bool canAlightAtCurrentOrReachedStop(LivePassenger passenger) =>
+      !isPickup &&
+      passenger.status == PassengerStatus.boarded &&
+      (passenger.stopId == nextStop?.stopId ||
+          stop(passenger.stopId)?.reachedAt != null);
+
+  int get alightingAtNextStop => nextStop == null
+      ? 0
+      : passengersAt(nextStop!.stopId)
+            .where((passenger) => passenger.status == PassengerStatus.boarded)
+            .length;
+
+  List<LivePassenger> get attendancePassengers => [
+    for (final passenger in passengers)
+      if (nextStop == null ||
+          passenger.stopId == nextStop?.stopId ||
+          canAlightAtCurrentOrReachedStop(passenger) ||
+          (passenger.status == PassengerStatus.pending &&
+              (!isPickup || stop(passenger.stopId)?.reachedAt != null)))
+        passenger,
+  ];
 
   LiveStop? stop(String? id) {
     for (final s in stops) {
@@ -241,36 +303,43 @@ class TripLive {
     return null;
   }
 
-  TripLive withPassengers(List<LivePassenger> next) => TripLive(
-        tripId: tripId,
-        status: status,
-        isPickup: isPickup,
-        startedAt: startedAt,
-        position: position,
-        nextStop: nextStop,
-        studentsOnBoard: next
-            .where((p) => p.status == PassengerStatus.boarded)
-            .length,
-        totalStudents: totalStudents,
-        hasActiveSos: hasActiveSos,
-        passengers: next,
-        stops: stops,
-      );
+  TripLive withPlannedItinerary(List<ItineraryPoint> itinerary) =>
+      withPassengers(passengers, itinerary: itinerary);
+
+  TripLive withPassengers(
+    List<LivePassenger> next, {
+    List<ItineraryPoint>? itinerary,
+  }) => TripLive(
+    tripId: tripId,
+    status: status,
+    isPickup: isPickup,
+    startedAt: startedAt,
+    position: position,
+    nextStop: nextStop,
+    studentsOnBoard: next
+        .where((p) => p.status == PassengerStatus.boarded)
+        .length,
+    totalStudents: totalStudents,
+    hasActiveSos: hasActiveSos,
+    passengers: next,
+    stops: stops,
+    plannedItinerary: itinerary ?? plannedItinerary,
+  );
 
   /// Mismo formato que el backend (para la caché del último `/live`).
   Map<String, dynamic> toJson() => {
-        'tripId': tripId,
-        'status': status,
-        'direction': isPickup ? 'Pickup' : 'Return',
-        'startedAt': startedAt?.toIso8601String(),
-        'position': position?.toJson(),
-        'nextStop': nextStop?.toJson(),
-        'studentsOnBoard': studentsOnBoard,
-        'totalStudents': totalStudents,
-        'hasActiveSos': hasActiveSos,
-        'passengers': [for (final p in passengers) p.toJson()],
-        'stops': [for (final s in stops) s.toJson()],
-      };
+    'tripId': tripId,
+    'status': status,
+    'direction': isPickup ? 'Pickup' : 'Return',
+    'startedAt': startedAt?.toIso8601String(),
+    'position': position?.toJson(),
+    'nextStop': nextStop?.toJson(),
+    'studentsOnBoard': studentsOnBoard,
+    'totalStudents': totalStudents,
+    'hasActiveSos': hasActiveSos,
+    'passengers': [for (final p in passengers) p.toJson()],
+    'stops': [for (final s in stops) s.toJson()],
+  };
 
   factory TripLive.fromJson(Map<String, dynamic> j) {
     final stops = [

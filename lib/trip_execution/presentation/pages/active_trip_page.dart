@@ -20,6 +20,7 @@ import '../../application/sync_service.dart';
 import '../../application/tracking_controller.dart';
 import '../../application/tracking_engine.dart';
 import '../../application/trip_controller.dart';
+import '../../application/trip_operational_details.dart';
 import '../../domain/model/queued_event.dart';
 import '../../domain/model/trip_live.dart';
 import '../../domain/model/trip_models.dart';
@@ -222,7 +223,13 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
     };
     Student studentFor(LivePassenger p) => Student(
       id: p.studentId,
-      fullName: students[p.studentId]?.fullName ?? 'Alumno sin ficha',
+      fullName:
+          ref
+              .read(tripOperationalDetailsProvider(tripDetailsKey(live)))
+              .value
+              ?.names[p.studentId] ??
+          students[p.studentId]?.fullName ??
+          'Nombre no disponible',
       grade: students[p.studentId]?.schoolGrade ?? '',
       guardianNotice: p.absentByGuardian ? 'aviso del apoderado' : null,
     );
@@ -342,6 +349,9 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
         : DateTime.now().difference(started).inMinutes;
     final next = live.nextStop;
     final map = ref.watch(tripMapBuilderProvider);
+    final details = ref
+        .watch(tripOperationalDetailsProvider(tripDetailsKey(live)))
+        .value;
     // La ubicación se comparte solo mientras el viaje está en curso: al dejar
     // de observarse, el provider se libera y el GPS se detiene.
     final tracking = live.isActive
@@ -369,14 +379,22 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
                 Expanded(
                   child: Stack(
                     children: [
-                      Positioned.fill(child: map(live)),
+                      Positioned.fill(
+                        child: map(
+                          live.withPlannedItinerary(
+                            details?.itinerary ?? const [],
+                          ),
+                        ),
+                      ),
                       Positioned(
                         left: 18,
                         right: 18,
                         top: 16,
                         child: _SharingPill(
                           tracking: tracking,
-                          pendingEvents: ref.watch(syncControllerProvider).pendingEvents,
+                          pendingEvents: ref
+                              .watch(syncControllerProvider)
+                              .pendingEvents,
                           serverAgeSeconds: live.position?.ageSeconds,
                         ),
                       ),
@@ -384,7 +402,9 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
                         alignment: Alignment.bottomCenter,
                         child: _BottomPanel(
                           nextStop: next,
-                          boardingAtNext: live.boardingAtNextStop,
+                          boardingAtNext: live.isPickup
+                              ? live.boardingAtNextStop
+                              : live.alightingAtNextStop,
                           destination: widget.trip.destination,
                           onBoard: live.studentsOnBoard,
                           totalStudents: live.totalStudents,
@@ -690,6 +710,11 @@ class _BottomPanel extends StatelessWidget {
   final VoidCallback onFinish;
 
   String _stopCaption() {
+    if (!isPickup && pending > 0) {
+      return pending == 1
+          ? 'Falta registrar 1 abordaje del colegio'
+          : 'Faltan registrar $pending abordajes del colegio';
+    }
     if (boardingAtNext == 0) return 'Sin alumnos pendientes en esta parada';
     if (isPickup) {
       return boardingAtNext == 1
@@ -749,10 +774,8 @@ class _BottomPanel extends StatelessWidget {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          s == null
-                              ? (isPickup
-                                    ? 'Todos los alumnos van a bordo'
-                                    : 'Sin más paradas')
+                          s == null && pending == 0
+                              ? 'Sin más paradas'
                               : _stopCaption(),
                           style: AppText.bodyText.copyWith(fontSize: 16),
                         ),
@@ -837,9 +860,11 @@ class _BottomPanel extends StatelessWidget {
                   ),
                 ),
               ],
-              if (s != null || pending > 0)
+              if (s != null || pending > 0 || (!isPickup && onBoard > 0))
                 AppButton(
-                  label: 'Registrar abordaje',
+                  label: isPickup || pending > 0
+                      ? 'Registrar abordaje'
+                      : 'Registrar bajada',
                   icon: Icons.check_box_outlined,
                   height: 68,
                   fontSize: 20,
@@ -847,7 +872,7 @@ class _BottomPanel extends StatelessWidget {
                 )
               else
                 AppButton(
-                  label: 'Llegué al colegio',
+                  label: isPickup ? 'Llegué al colegio' : 'Finalizar retorno',
                   icon: Icons.flag_outlined,
                   height: 68,
                   fontSize: 20,

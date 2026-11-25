@@ -103,6 +103,8 @@ class TripController extends AsyncNotifier<TripLive> {
   // La cancelación se avisa una sola vez, llegue por el canal en tiempo real
   // o por `/live`, lo que ocurra primero.
   bool _cancelNotified = false;
+  Future<void>? _refreshInProgress;
+  bool _syncRequested = false;
 
   @override
   Future<TripLive> build() {
@@ -137,6 +139,8 @@ class TripController extends AsyncNotifier<TripLive> {
       case RealtimeStatusChanged(:final status, :final reason):
         if (status == 'Cancelled') _notifyCancelled(reason);
         refresh();
+      case RealtimePositionChanged():
+        if (state.value?.isActive == true) refresh(syncPending: false);
     }
   }
 
@@ -238,10 +242,34 @@ class TripController extends AsyncNotifier<TripLive> {
 
   /// Manda lo guardado sin red (GPS, luego acciones) y vuelve a pedir `/live`
   /// sin mostrar carga. Si falla, se conserva lo último.
-  Future<void> refresh() async {
+  Future<void> refresh({bool syncPending = true}) async {
     if (_inFlight > 0 || !ref.mounted || !state.hasValue) return;
+    if (syncPending) _syncRequested = true;
+    final current = _refreshInProgress;
+    if (current != null) return current;
+
+    final refresh = _drainRefreshes();
+    _refreshInProgress = refresh;
     try {
-      await _sync.syncTrip(trip.id);
+      await refresh;
+    } finally {
+      _refreshInProgress = null;
+    }
+  }
+
+  Future<void> _drainRefreshes() async {
+    // Un aviso GPS puede compartir la lectura actual. Una sincronización
+    // solicitada durante esa lectura aún tiene que enviar la cola offline.
+    do {
+      final syncPending = _syncRequested;
+      _syncRequested = false;
+      await _refreshLive(syncPending: syncPending);
+    } while (_syncRequested && ref.mounted && _inFlight == 0);
+  }
+
+  Future<void> _refreshLive({required bool syncPending}) async {
+    try {
+      if (syncPending) await _sync.syncTrip(trip.id);
       final live = await _api.live(trip.id);
       if (!ref.mounted) return;
       unawaited(_cache.write(_liveKey, jsonEncode(live.toJson())));

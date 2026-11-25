@@ -173,6 +173,11 @@ TripLive testLive({
 }
 
 class FakeTripApi implements TripApi {
+  Map<String, dynamic> details = const {};
+
+  @override
+  Future<Map<String, dynamic>> operationalDetails(String tripId) async => details;
+
   FakeTripApi({List<ScheduledTrip>? trips, this.error, TripLive? live})
       : trips = trips ?? [testTrip()],
         liveState = live ?? testLive();

@@ -26,13 +26,15 @@ class _TripMapState extends State<TripMap> {
   TripLive get _live => widget.live;
 
   List<LatLng> get _points => [
-        for (final s in _live.stops) LatLng(s.latitude, s.longitude),
-        if (_live.position case final p?) LatLng(p.latitude, p.longitude),
-      ];
+    for (final s in _live.stops) LatLng(s.latitude, s.longitude),
+    for (final p in _live.plannedItinerary) LatLng(p.latitude, p.longitude),
+    if (_live.position case final p?) LatLng(p.latitude, p.longitude),
+  ];
 
   /// Cambia cuando hay que volver a encuadrar: un viaje distinto o la primera
   /// vez que aparece el vehículo.
-  String get _fitKey => '${_live.tripId}/${_live.position != null}';
+  String get _fitKey =>
+      '${_live.tripId}/${_live.position != null}/${_live.plannedItinerary.length}';
 
   /// Encuadre del recorrido (paradas y vehículo); `null` si aún no hay puntos.
   CameraFit? get _cameraFit {
@@ -102,16 +104,17 @@ class _TripMapState extends State<TripMap> {
           userAgentPackageName: 'com.example.rutasegura',
           // Los fallos de teselas son silenciosos: en desarrollo se registran.
           errorTileCallback: kDebugMode
-              ? (tile, error, _) => debugPrint('Mapa: tesela ${tile.coordinates} falló: $error')
+              ? (tile, error, _) =>
+                    debugPrint('Mapa: tesela ${tile.coordinates} falló: $error')
               : null,
         ),
-        // Unión recta entre paradas (aproximada: no sigue las calles).
-        if (_live.stops.length > 1)
+        if (_live.plannedItinerary.length > 1)
           PolylineLayer(
             polylines: [
               Polyline(
                 points: [
-                  for (final s in _live.stops) LatLng(s.latitude, s.longitude),
+                  for (final p in _live.plannedItinerary)
+                    LatLng(p.latitude, p.longitude),
                 ],
                 color: AppColors.navy,
                 strokeWidth: 4,
@@ -141,6 +144,24 @@ class _TripMapState extends State<TripMap> {
               ),
           ],
         ),
+        Positioned(
+          left: 18,
+          top: 74,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Text(
+                _live.plannedItinerary.length > 1
+                    ? 'Itinerario previsto'
+                    : 'Itinerario vial no disponible',
+              ),
+            ),
+          ),
+        ),
         // Debajo de la píldora "Compartiendo ubicación", que si no la tapa. El
         // widget trae su propio SafeArea: sin quitar el inset de arriba sumaría
         // el alto de la barra de estado aunque el mapa ya empiece más abajo.
@@ -161,7 +182,11 @@ class _TripMapState extends State<TripMap> {
 }
 
 class _StopPin extends StatelessWidget {
-  const _StopPin({required this.number, required this.isNext, required this.reached});
+  const _StopPin({
+    required this.number,
+    required this.isNext,
+    required this.reached,
+  });
 
   final int number;
   final bool isNext;
@@ -169,8 +194,12 @@ class _StopPin extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bg = isNext ? AppColors.yellow : (reached ? AppColors.disabledBg : AppColors.navy);
-    final fg = isNext ? AppColors.navy : (reached ? AppColors.textSecondary : Colors.white);
+    final bg = isNext
+        ? AppColors.yellow
+        : (reached ? AppColors.disabledBg : AppColors.navy);
+    final fg = isNext
+        ? AppColors.navy
+        : (reached ? AppColors.textSecondary : Colors.white);
     return Container(
       decoration: BoxDecoration(
         color: bg,
@@ -192,17 +221,22 @@ class _VehiclePin extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        decoration: BoxDecoration(
-          color: AppColors.link,
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.white, width: 3),
-          boxShadow: const [BoxShadow(color: Color(0x40000000), blurRadius: 6)],
-        ),
-        child: const Icon(Icons.directions_bus_rounded, color: Colors.white, size: 22),
-      );
+    decoration: BoxDecoration(
+      color: AppColors.link,
+      shape: BoxShape.circle,
+      border: Border.all(color: Colors.white, width: 3),
+      boxShadow: const [BoxShadow(color: Color(0x40000000), blurRadius: 6)],
+    ),
+    child: const Icon(
+      Icons.directions_bus_rounded,
+      color: Colors.white,
+      size: 22,
+    ),
+  );
 }
 
 /// Permite sustituir el mapa en las pruebas (los tiles necesitan red).
 final tripMapBuilderProvider = Provider<Widget Function(TripLive)>(
-  (ref) => (live) => TripMap(live: live),
+  (ref) =>
+      (live) => TripMap(live: live),
 );

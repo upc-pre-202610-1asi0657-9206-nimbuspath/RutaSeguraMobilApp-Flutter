@@ -26,6 +26,34 @@ Future<void> _pump(
 void main() {
   final trip = testTrip(status: 'InProgress');
 
+  testWidgets('retorno: aborda en el colegio al alumno de otra parada', (tester) async {
+    final api = FakeTripApi(live: testLive(isPickup: false, passengers: [
+      testPassenger('s1', stopId: 'p2'),
+    ]))..details = {
+      'students': [{'studentId': 's1', 'fullName': 'Lucía Demo'}],
+    };
+    await _pump(tester, BoardingPage(trip: trip), api);
+
+    expect(find.text('Abordaje de retorno'), findsOneWidget);
+    expect(find.text('Lucía Demo'), findsOneWidget);
+    expect(find.textContaining('Sube en el colegio'), findsOneWidget);
+    await tester.tap(find.text('Subió'));
+    await tester.pumpAndSettle();
+    expect(api.actions, hasLength(1));
+    expect(find.text('Bajó'), findsNothing);
+
+    // Con GPS detenido en la primera parada, el conductor aún puede
+    // registrar la entrega sin depender de que avance el mapa.
+    await tester.tap(find.text('Ver todo el padrón'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Bajó'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Jr. Las Begonias 455.'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Confirmar bajada'));
+    await tester.pumpAndSettle();
+    expect(api.actions, hasLength(2));
+  });
+
   testWidgets('abordaje: registrar a todos habilita "Confirmar parada"', (tester) async {
     final api = FakeTripApi();
     await _pump(tester, BoardingPage(trip: trip), api);

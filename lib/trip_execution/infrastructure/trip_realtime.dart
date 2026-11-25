@@ -17,6 +17,12 @@ class RealtimeConnected extends RealtimeEvent {
   const RealtimeConnected();
 }
 
+/// El hub avisa que hay una posición nueva. El cliente vuelve a pedir el
+/// estado autorizado por REST.
+class RealtimePositionChanged extends RealtimeEvent {
+  const RealtimePositionChanged();
+}
+
 /// `TripStatusChanged`: el viaje inició, se retrasó, terminó o se canceló.
 class RealtimeStatusChanged extends RealtimeEvent {
   const RealtimeStatusChanged({required this.status, this.reason});
@@ -92,6 +98,12 @@ class SignalRTripRealtime implements TripRealtime {
           h.on('TripStatusChanged', (args) {
             final e = RealtimeStatusChanged.tryParse(args);
             if (e != null && !controller.isClosed) controller.add(e);
+          });
+          h.on('PositionUpdated', (args) {
+            final body = args?.firstOrNull;
+            if (body is Map && body['tripId'] == tripId && !controller.isClosed) {
+              controller.add(const RealtimePositionChanged());
+            }
           });
           h.onclose(({error}) {
             if (!dropped.isCompleted) dropped.complete();

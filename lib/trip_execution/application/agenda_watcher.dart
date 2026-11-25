@@ -131,6 +131,8 @@ class AgendaWatcher extends Notifier<CancelledTrip?> {
         if (status != 'Cancelled') return;
         _announce(trip, reason);
         _refresh();
+      case RealtimePositionChanged():
+        break;
     }
   }
 
