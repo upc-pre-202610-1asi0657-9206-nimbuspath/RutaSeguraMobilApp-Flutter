@@ -77,6 +77,15 @@
 		<!-- HTTP sin TLS solo hacia la red local (Gateway en la PC de desarrollo). -->
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
+		<!-- Temporal: Gateway desplegado en AWS sin HTTPS. Quitar al habilitar el certificado. -->
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>ec2-3-216-48-246.compute-1.amazonaws.com</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
 	</dict>
 </dict>
 </plist>

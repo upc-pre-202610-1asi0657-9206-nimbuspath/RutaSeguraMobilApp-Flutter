@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug/profile: HTTP permitido a cualquier host (Gateway local en 10.0.2.2:8000,
+     IP de la PC o el Gateway de AWS). Reemplaza al de main/ en estos builds. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

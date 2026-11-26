@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Release: HTTPS obligatorio, salvo el Gateway desplegado en AWS mientras no tenga
+     certificado. Al habilitar HTTPS en el servidor, borrar el domain-config. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">ec2-3-216-48-246.compute-1.amazonaws.com</domain>
+    </domain-config>
+</network-security-config>

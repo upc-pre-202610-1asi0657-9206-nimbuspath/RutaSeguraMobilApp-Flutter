@@ -1,0 +1,4 @@
+{
+  "APP_ENV": "aws",
+  "API_BASE_URL": "http://ec2-3-216-48-246.compute-1.amazonaws.com:8080"
+}

@@ -58,11 +58,15 @@ lib/
    | Emulador Android | `flutter run --dart-define-from-file=config/dev.json` | `http://10.0.2.2:8000` (automática) |
    | Simulador iOS | `flutter run --dart-define-from-file=config/dev.json` | `http://127.0.0.1:8000` (automática) |
    | Celular físico | copiar `config/device.example.json` a `config/device.json` con la IP de tu PC, y `flutter run --dart-define-from-file=config/device.json` | `http://192.168.x.x:8000` |
+   | Gateway desplegado (AWS) | `flutter run --dart-define-from-file=config/aws.json` (APK: `flutter build apk --dart-define-from-file=config/aws.json`) | `http://ec2-3-216-48-246.compute-1.amazonaws.com:8080` |
    | Cualquier otra | `flutter run --dart-define=API_BASE_URL=https://...` | la indicada |
 
 HTTP sin TLS solo está permitido en desarrollo: Android en los builds `debug`/`profile`
-(`usesCleartextTraffic`), iOS solo hacia la red local (`NSAllowsLocalNetworking`).
-En producción el Gateway debe ir por HTTPS.
+(`res/xml/network_security_config.xml` de `debug/` y `profile/`), iOS solo hacia la red local
+(`NSAllowsLocalNetworking`). **Excepción temporal:** el Gateway de AWS aún no tiene HTTPS, así que
+también se permite HTTP solo hacia `ec2-3-216-48-246.compute-1.amazonaws.com` en release
+(`android/app/src/main/res/xml/network_security_config.xml`) y en iOS (`NSExceptionDomains` en
+`Info.plist`). Al habilitar HTTPS en el servidor, quitar esas excepciones y actualizar `config/aws.json`.
 
 ## Cliente HTTP
 
