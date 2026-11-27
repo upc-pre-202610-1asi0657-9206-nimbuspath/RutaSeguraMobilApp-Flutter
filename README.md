@@ -12,6 +12,8 @@ App móvil (Flutter, iOS y Android) **solo para conductores**. Se conecta al bac
 | Estado / inyección | `flutter_riverpod` |
 | Navegación | `go_router` |
 | HTTP | `dio` |
+| Bandeja y avisos inmediatos | REST con cursor y `signalr_netcore` |
+| Push Android y aviso en primer plano | `firebase_core`, `firebase_messaging`, `flutter_local_notifications` |
 | Token JWT | `flutter_secure_storage` (Keychain / Keystore) |
 | `clientEventId`, `X-Correlation-Id` | `uuid` |
 | Caché local (agenda, último estado del viaje) | `shared_preferences` |
@@ -135,22 +137,12 @@ Android contra el Gateway real (última revisión: 12/11/2026).
 - **Iniciar y finalizar un viaje exigen conexión** (iniciar, por contrato; finalizar, porque no se cierra con
   registros sin enviar). El abordaje, los incidentes y el SOS sí se guardan sin señal y se envían al volver.
 - **Incidente.** Foto y nota de voz figuran como "próximamente"; el backend aún no las admite.
-- **Dependencia fijada.** `permission_handler` está en `^12.0.1`: la versión 13 exige Android SDK 37 y
-  Gradle falla con `Failed to find target with hash string 'android-37'`. No subirla hasta resolverlo.
+- **Android SDK.** Se requiere `compileSdk = 37` para el receptor de avisos locales. Mantener el SDK instalado y las licencias aceptadas.
 
 ### Depende del backend (`rutasegura-backend`)
 
-- **Notification no funciona.** La bandeja, los comunicados y las entregas fallidas responden 503
-  `NOTIFICATION_DEPENDENCY_UNAVAILABLE`, porque el monolito no expone cuatro endpoints internos
-  (`/internal/v1/notifications/recipients/{operators,students,announcement}` y `.../student-links`).
-  Ver §13.1 del README del backend.
-- **El conductor no es destinatario de Notification.** Los avisos van a tutores y administradores. Si se
-  quiere que el conductor reciba comunicados o avisos con la app cerrada, hay que definirlo en el backend.
-- **Push (FCM).** No existe en la app, que tampoco registra suscripciones en
-  `PUT /push-subscriptions/{installationId}`. En el backend es opcional por entorno; no se verificó si está
-  configurado.
-- **SOS resuelto.** El canal en tiempo real no emite nada al resolverse un SOS; la app lo detecta con
-  `hasActiveSos` de `/live`.
+- **Notifications del conductor.** Implementadas bandeja, lectura, SignalR, push Android, renovación del token y baja al salir. Requiere desplegar Monolith, Trip & Tracking y Notifications con los cambios descritos en `docs/NOTIFICACIONES-CONDUCTOR.md` del backend. El push web desde AWS ya fue confirmado por el usuario; falta aceptación del conductor en un Android real. Instrucciones en [docs/NOTIFICACIONES.md](docs/NOTIFICACIONES.md).
+- **SOS resuelto.** Se conserva la reconciliación por `hasActiveSos` de `/live` y se añade un aviso persistente/push al conductor cuando la empresa resuelve el SOS.
 - **"Llamar a la empresa" en el SOS.** Falta un campo de teléfono en el endpoint de organización (y
   `url_launcher` en la app).
 - **Cancelar viajes.** El backend solo lo permite antes de iniciarlo, por eso un conductor ya en

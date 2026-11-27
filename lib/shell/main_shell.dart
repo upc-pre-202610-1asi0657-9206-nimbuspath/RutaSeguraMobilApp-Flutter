@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:go_router/go_router.dart';
 
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_typography.dart';
@@ -23,6 +24,12 @@ class _MainShellState extends State<MainShell> {
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.dark,
       child: Scaffold(
+        floatingActionButton: FloatingActionButton.small(
+          heroTag: 'driver-notifications',
+          tooltip: 'Notificaciones',
+          onPressed: () => context.push('/notifications'),
+          child: const Icon(Icons.notifications_outlined),
+        ),
         body: IndexedStack(
           index: _index,
           children: [

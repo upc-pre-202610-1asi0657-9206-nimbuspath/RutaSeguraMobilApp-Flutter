@@ -1,4 +1,8 @@
 import 'package:flutter_riverpod/misc.dart' show Override;
+import 'package:rutasegura/core/network/api_client.dart';
+import 'package:rutasegura/notifications/infrastructure/notification_api.dart';
+import 'package:rutasegura/notifications/infrastructure/notification_realtime.dart';
+import 'package:rutasegura/notifications/domain/model/driver_notification.dart';
 import 'package:rutasegura/core/network/api_error.dart';
 import 'package:rutasegura/core/storage/token_storage.dart';
 import 'package:rutasegura/iam/domain/model/driver.dart';
@@ -20,6 +24,7 @@ import 'package:rutasegura/trip_execution/infrastructure/trip_realtime.dart';
 import 'package:rutasegura/trip_execution/domain/model/trip_live.dart';
 import 'package:rutasegura/trip_execution/domain/model/trip_models.dart';
 import 'package:rutasegura/trip_execution/infrastructure/trip_api.dart';
+
 import 'dart:async';
 import 'dart:typed_data';
 
@@ -82,28 +87,26 @@ class FakeRosterApi implements RosterApi {
 
   @override
   Future<List<Vehicle>> vehicles() async => const [
-        Vehicle(
-          id: 'v1',
-          licensePlate: 'ABC-123',
-          seatingCapacity: 22,
-          brand: 'Toyota',
-          model: 'Coaster',
-        ),
-      ];
+    Vehicle(
+      id: 'v1',
+      licensePlate: 'ABC-123',
+      seatingCapacity: 22,
+      brand: 'Toyota',
+      model: 'Coaster',
+    ),
+  ];
 
   @override
   Future<List<DriverRoute>> routes() async => const [
-        DriverRoute(
-          id: 'r1',
-          name: 'Ruta 3',
-          direction: 'PICKUP',
-          status: 'ACTIVE',
-          departureTime: '06:40',
-          operatingDays: [
-            'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday',
-          ],
-        ),
-      ];
+    DriverRoute(
+      id: 'r1',
+      name: 'Ruta 3',
+      direction: 'PICKUP',
+      status: 'ACTIVE',
+      departureTime: '06:40',
+      operatingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+    ),
+  ];
 }
 
 /// Viaje de la agenda. Por defecto sale en 30 min (dentro de la ventana de
@@ -114,31 +117,29 @@ ScheduledTrip testTrip({
   Duration startsIn = const Duration(minutes: 30),
   String direction = 'Pickup',
   String vehicleId = 'v1',
-}) =>
-    ScheduledTrip.fromJson({
-      'tripId': id,
-      'routeId': 'r1',
-      'routeName': 'Ruta 3',
-      'direction': direction,
-      'scheduledStart': DateTime.now().add(startsIn).toUtc().toIso8601String(),
-      'status': status,
-      'vehicleId': vehicleId,
-      'stopCount': 7,
-      'studentCount': 18,
-    });
+}) => ScheduledTrip.fromJson({
+  'tripId': id,
+  'routeId': 'r1',
+  'routeName': 'Ruta 3',
+  'direction': direction,
+  'scheduledStart': DateTime.now().add(startsIn).toUtc().toIso8601String(),
+  'status': status,
+  'vehicleId': vehicleId,
+  'stopCount': 7,
+  'studentCount': 18,
+});
 
 LivePassenger testPassenger(
   String studentId, {
   String stopId = 'p1',
   PassengerStatus status = PassengerStatus.pending,
   String? absenceSource,
-}) =>
-    LivePassenger(
-      studentId: studentId,
-      stopId: stopId,
-      status: status,
-      absenceSource: absenceSource,
-    );
+}) => LivePassenger(
+  studentId: studentId,
+  stopId: stopId,
+  status: status,
+  absenceSource: absenceSource,
+);
 
 /// Estado en vivo de un recojo con 2 paradas; los alumnos s1 y s2 suben en p1.
 TripLive testLive({
@@ -161,13 +162,27 @@ TripLive testLive({
       distanceMeters: 850,
       etaMinutes: 3,
     ),
-    studentsOnBoard: list.where((p) => p.status == PassengerStatus.boarded).length,
+    studentsOnBoard: list
+        .where((p) => p.status == PassengerStatus.boarded)
+        .length,
     totalStudents: list.length,
     hasActiveSos: hasActiveSos,
     passengers: list,
     stops: const [
-      LiveStop(stopId: 'p1', name: 'Av. Primavera 1240', sequence: 1, latitude: -12.1, longitude: -77.0),
-      LiveStop(stopId: 'p2', name: 'Jr. Las Begonias 455', sequence: 2, latitude: -12.11, longitude: -77.01),
+      LiveStop(
+        stopId: 'p1',
+        name: 'Av. Primavera 1240',
+        sequence: 1,
+        latitude: -12.1,
+        longitude: -77.0,
+      ),
+      LiveStop(
+        stopId: 'p2',
+        name: 'Jr. Las Begonias 455',
+        sequence: 2,
+        latitude: -12.11,
+        longitude: -77.01,
+      ),
     ],
   );
 }
@@ -176,11 +191,12 @@ class FakeTripApi implements TripApi {
   Map<String, dynamic> details = const {};
 
   @override
-  Future<Map<String, dynamic>> operationalDetails(String tripId) async => details;
+  Future<Map<String, dynamic>> operationalDetails(String tripId) async =>
+      details;
 
   FakeTripApi({List<ScheduledTrip>? trips, this.error, TripLive? live})
-      : trips = trips ?? [testTrip()],
-        liveState = live ?? testLive();
+    : trips = trips ?? [testTrip()],
+      liveState = live ?? testLive();
 
   final List<ScheduledTrip> trips;
   ApiError? error;
@@ -214,11 +230,13 @@ class FakeTripApi implements TripApi {
   /// Simula que el teléfono se queda sin señal: todo falla por red.
   void goOffline() {
     const e = ApiError(kind: ApiErrorKind.network);
-    liveError = actionError = incidentError = sosError = syncError = positionsError = e;
+    liveError = actionError = incidentError = sosError = syncError =
+        positionsError = e;
   }
 
   void goOnline() {
-    liveError = actionError = incidentError = sosError = syncError = positionsError = null;
+    liveError = actionError = incidentError = sosError = syncError =
+        positionsError = null;
   }
 
   @override
@@ -239,7 +257,9 @@ class FakeTripApi implements TripApi {
     };
     liveState = liveState.withPassengers([
       for (final p in liveState.passengers)
-        p.studentId == studentId ? p.copyWith(status: to, boardedAt: occurredAt) : p,
+        p.studentId == studentId
+            ? p.copyWith(status: to, boardedAt: occurredAt)
+            : p,
     ]);
   }
 
@@ -304,11 +324,16 @@ class FakeTripApi implements TripApi {
   final _seen = <String>{};
 
   @override
-  Future<List<SyncOutcome>> sync(String tripId, List<QueuedEvent> events) async {
+  Future<List<SyncOutcome>> sync(
+    String tripId,
+    List<QueuedEvent> events,
+  ) async {
     if (syncError != null) throw syncError!;
     syncBatches.add(List.of(events));
     for (final e in events) {
-      if (syncRejections.containsKey(e.clientEventId) || _seen.contains(e.clientEventId)) continue;
+      if (syncRejections.containsKey(e.clientEventId) ||
+          _seen.contains(e.clientEventId))
+        continue;
       final to = switch (e.type) {
         QueuedEventType.boarding => PassengerStatus.boarded,
         QueuedEventType.alighting => PassengerStatus.alighted,
@@ -320,13 +345,19 @@ class FakeTripApi implements TripApi {
         liveState = liveState.withPassengers([
           for (final p in liveState.passengers)
             p.studentId == e.studentId
-                ? p.copyWith(status: to, boardedAt: e.occurredAt, clearTimes: to == PassengerStatus.pending)
+                ? p.copyWith(
+                    status: to,
+                    boardedAt: e.occurredAt,
+                    clearTimes: to == PassengerStatus.pending,
+                  )
                 : p,
         ]);
       }
       if (e.type == QueuedEventType.sos) sosEvents.add(e.clientEventId);
       if (e.type == QueuedEventType.incident) {
-        incidents.add('${e.incidentType}|${e.detail ?? ''}|${e.notifyGuardians}');
+        incidents.add(
+          '${e.incidentType}|${e.detail ?? ''}|${e.notifyGuardians}',
+        );
       }
     }
     return [
@@ -338,9 +369,15 @@ class FakeTripApi implements TripApi {
             errorCode: syncRejections[e.clientEventId],
           )
         else if (!_seen.add(e.clientEventId))
-          SyncOutcome(clientEventId: e.clientEventId, status: SyncStatus.duplicate)
+          SyncOutcome(
+            clientEventId: e.clientEventId,
+            status: SyncStatus.duplicate,
+          )
         else
-          SyncOutcome(clientEventId: e.clientEventId, status: SyncStatus.applied),
+          SyncOutcome(
+            clientEventId: e.clientEventId,
+            status: SyncStatus.applied,
+          ),
     ];
   }
 
@@ -439,14 +476,13 @@ GpsReading testReading({
   double accuracy = 8,
   double speedKmh = 20,
   DateTime? at,
-}) =>
-    GpsReading(
-      latitude: lat,
-      longitude: lon,
-      recordedAt: at ?? DateTime.now(),
-      accuracyMeters: accuracy,
-      speedKmh: speedKmh,
-    );
+}) => GpsReading(
+  latitude: lat,
+  longitude: lon,
+  recordedAt: at ?? DateTime.now(),
+  accuracyMeters: accuracy,
+  speedKmh: speedKmh,
+);
 
 class FakeDeviceChecks implements DeviceChecks {
   @override
@@ -459,10 +495,10 @@ class FakeDeviceChecks implements DeviceChecks {
 
   @override
   Future<CheckResult> battery() async => const CheckResult(
-        CheckLevel.warning,
-        'Batería al 34 %',
-        'Conecta el cargador antes de partir',
-      );
+    CheckLevel.warning,
+    'Batería al 34 %',
+    'Conecta el cargador antes de partir',
+  );
 }
 
 /// Canal en tiempo real simulado, uno por viaje: `emit` hace llegar un evento
@@ -488,27 +524,30 @@ class FakeTripRealtime implements TripRealtime {
   @override
   Stream<RealtimeEvent> watch(String tripId) {
     watched.add(tripId);
-    return (_controllers[tripId] ??= StreamController<RealtimeEvent>.broadcast()).stream;
+    return (_controllers[tripId] ??=
+            StreamController<RealtimeEvent>.broadcast())
+        .stream;
   }
 }
 
 /// El mismo estado en vivo pero con otro `status` (p. ej. `Cancelled`).
 TripLive liveWithStatus(TripLive l, String status) => TripLive(
-      tripId: l.tripId,
-      status: status,
-      isPickup: l.isPickup,
-      startedAt: l.startedAt,
-      position: l.position,
-      nextStop: l.nextStop,
-      studentsOnBoard: l.studentsOnBoard,
-      totalStudents: l.totalStudents,
-      hasActiveSos: l.hasActiveSos,
-      passengers: l.passengers,
-      stops: l.stops,
-    );
+  tripId: l.tripId,
+  status: status,
+  isPickup: l.isPickup,
+  startedAt: l.startedAt,
+  position: l.position,
+  nextStop: l.nextStop,
+  studentsOnBoard: l.studentsOnBoard,
+  totalStudents: l.totalStudents,
+  hasActiveSos: l.hasActiveSos,
+  passengers: l.passengers,
+  stops: l.stops,
+);
 
 /// Overrides para probar la app sin red.
 List<Override> fakeBackend({
+  NotificationApi? notifications,
   TripRealtime? realtime,
   RequestNotificationPermission? notificationPermission,
   OfflineStore? offline,
@@ -521,25 +560,47 @@ List<Override> fakeBackend({
   StakeholderApi? stakeholders,
   LocalCache? cache,
   PhotoStore? photos,
-}) =>
-    [
-      tokenStorageProvider.overrideWithValue(storage ?? signedInStorage()),
-      iamApiProvider.overrideWithValue(iam ?? FakeIamApi()),
-      rosterApiProvider.overrideWithValue(roster ?? FakeRosterApi()),
-      tripApiProvider.overrideWithValue(trips ?? FakeTripApi()),
-      tripRealtimeProvider.overrideWithValue(realtime ?? FakeTripRealtime()),
-      notificationPermissionProvider
-          .overrideWithValue(notificationPermission ?? () async {}),
-      stakeholderApiProvider.overrideWithValue(stakeholders ?? FakeStakeholderApi()),
-      offlineStoreProvider.overrideWithValue(offline ?? InMemoryOfflineStore()),
-      connectivityRestoredProvider.overrideWith((ref) => const Stream<bool>.empty()),
-      deviceChecksProvider.overrideWithValue(FakeDeviceChecks()),
-      positionSourceProvider.overrideWithValue(gps ?? FakePositionSource()),
-      trackingFlushEveryProvider.overrideWithValue(flushEvery),
-      positionReaderProvider.overrideWithValue(() async => (latitude: -12.1, longitude: -77.0)),
-      tripMapBuilderProvider.overrideWithValue((_) => const SizedBox.expand(key: Key('fake-map'))),
-      localCacheProvider.overrideWithValue(cache ?? InMemoryLocalCache()),
-      photoStoreProvider.overrideWithValue(photos ?? InMemoryPhotoStore()),
-    ];
+}) => [
+  notificationApiProvider.overrideWith((ref) {
+    final api = notifications ?? EmptyNotificationApi();
+    if (notifications == null) ref.onDispose(api.client.dispose);
+    return api;
+  }),
+  notificationHintsProvider.overrideWithValue(() => const Stream<void>.empty()),
+  tokenStorageProvider.overrideWithValue(storage ?? signedInStorage()),
+  iamApiProvider.overrideWithValue(iam ?? FakeIamApi()),
+  rosterApiProvider.overrideWithValue(roster ?? FakeRosterApi()),
+  tripApiProvider.overrideWithValue(trips ?? FakeTripApi()),
+  tripRealtimeProvider.overrideWithValue(realtime ?? FakeTripRealtime()),
+  notificationPermissionProvider.overrideWithValue(
+    notificationPermission ?? () async {},
+  ),
+  stakeholderApiProvider.overrideWithValue(
+    stakeholders ?? FakeStakeholderApi(),
+  ),
+  offlineStoreProvider.overrideWithValue(offline ?? InMemoryOfflineStore()),
+  connectivityRestoredProvider.overrideWith(
+    (ref) => const Stream<bool>.empty(),
+  ),
+  deviceChecksProvider.overrideWithValue(FakeDeviceChecks()),
+  positionSourceProvider.overrideWithValue(gps ?? FakePositionSource()),
+  trackingFlushEveryProvider.overrideWithValue(flushEvery),
+  positionReaderProvider.overrideWithValue(
+    () async => (latitude: -12.1, longitude: -77.0),
+  ),
+  tripMapBuilderProvider.overrideWithValue(
+    (_) => const SizedBox.expand(key: Key('fake-map')),
+  ),
+  localCacheProvider.overrideWithValue(cache ?? InMemoryLocalCache()),
+  photoStoreProvider.overrideWithValue(photos ?? InMemoryPhotoStore()),
+];
 
 InMemoryTokenStorage signedInStorage() => InMemoryTokenStorage('jwt');
+
+class EmptyNotificationApi extends NotificationApi {
+  EmptyNotificationApi()
+    : super(ApiClient(tokenStorage: InMemoryTokenStorage()));
+  @override
+  Future<DriverNotificationPage> page({String? cursor}) async =>
+      const DriverNotificationPage([], null);
+}

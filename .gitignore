@@ -59,3 +59,6 @@ _to_delete/
 
 # Android build outputs
 /android/build/
+
+# Optional build tooling/cache kept on the same drive as this project on Windows.
+/.local/

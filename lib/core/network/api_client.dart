@@ -21,17 +21,17 @@ class ApiClient {
     String? baseUrl,
     HttpClientAdapter? adapter,
   }) : _dio = Dio(
-          BaseOptions(
-            baseUrl: '${baseUrl ?? AppConfig.apiBaseUrl}${AppConfig.apiPrefix}',
-            connectTimeout: AppConfig.connectTimeout,
-            receiveTimeout: AppConfig.receiveTimeout,
-            sendTimeout: AppConfig.sendTimeout,
-            contentType: Headers.jsonContentType,
-            responseType: ResponseType.json,
-            headers: {'Accept': 'application/json'},
-          ),
-        ),
-        origin = baseUrl ?? AppConfig.apiBaseUrl {
+         BaseOptions(
+           baseUrl: '${baseUrl ?? AppConfig.apiBaseUrl}${AppConfig.apiPrefix}',
+           connectTimeout: AppConfig.connectTimeout,
+           receiveTimeout: AppConfig.receiveTimeout,
+           sendTimeout: AppConfig.sendTimeout,
+           contentType: Headers.jsonContentType,
+           responseType: ResponseType.json,
+           headers: {'Accept': 'application/json'},
+         ),
+       ),
+       origin = baseUrl ?? AppConfig.apiBaseUrl {
     if (adapter != null) _dio.httpClientAdapter = adapter;
     _dio.interceptors.addAll([
       CorrelationIdInterceptor(),
@@ -55,32 +55,44 @@ class ApiClient {
     String path, {
     Map<String, dynamic>? query,
     bool auth = true,
-  }) =>
-      _send(() => _dio.get<dynamic>(
-            path,
-            queryParameters: query,
-            options: _options(auth),
-          ));
+  }) => _send(
+    () => _dio.get<dynamic>(
+      path,
+      queryParameters: query,
+      options: _options(auth),
+    ),
+  );
 
-  Future<dynamic> post(String path, {Object? body, bool auth = true}) =>
-      _send(() => _dio.post<dynamic>(path, data: body, options: _options(auth)));
+  Future<dynamic> post(String path, {Object? body, bool auth = true}) => _send(
+    () => _dio.post<dynamic>(path, data: body, options: _options(auth)),
+  );
 
   Future<dynamic> put(String path, {Object? body, bool auth = true}) =>
       _send(() => _dio.put<dynamic>(path, data: body, options: _options(auth)));
 
+  Future<dynamic> patch(String path, {Object? body, bool auth = true}) => _send(
+    () => _dio.patch<dynamic>(path, data: body, options: _options(auth)),
+  );
+
+  Future<dynamic> delete(String path, {bool auth = true}) =>
+      _send(() => _dio.delete<dynamic>(path, options: _options(auth)));
+
   /// Descarga binaria con token (fotos de alumnos). [url] puede ser relativa
   /// al Gateway, como la `photoUrl` de Stakeholder.
   Future<Uint8List> getBytes(String url) async {
-    final data = await _send(() => _dio.get<List<int>>(
-          resolveUrl(url),
-          options: Options(responseType: ResponseType.bytes),
-        ));
+    final data = await _send(
+      () => _dio.get<List<int>>(
+        resolveUrl(url),
+        options: Options(responseType: ResponseType.bytes),
+      ),
+    );
     return Uint8List.fromList(data as List<int>);
   }
 
   /// Convierte una ruta relativa del backend (`/api/v1/...`) en absoluta.
-  String resolveUrl(String url) =>
-      url.startsWith('http') ? url : '$origin${url.startsWith('/') ? '' : '/'}$url';
+  String resolveUrl(String url) => url.startsWith('http')
+      ? url
+      : '$origin${url.startsWith('/') ? '' : '/'}$url';
 
   Options _options(bool auth) => Options(extra: {ApiExtra.skipAuth: !auth});
 

@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/network/api_client.dart';
+import '../../core/permissions/session_notification_cleanup.dart';
 import '../../core/network/api_error.dart';
 import '../../core/network/api_error_message.dart';
 import '../../core/storage/local_cache.dart';
@@ -39,6 +40,7 @@ class SessionActive extends SessionState {
 /// Al cerrar sesión solo se borran token y cuenta; la cola offline (etapa 7)
 /// vive aparte y se conserva para sincronizar tras un nuevo login.
 class SessionController extends Notifier<SessionState> {
+  bool _expiring = false;
   late final TokenStorage _storage = ref.read(tokenStorageProvider);
   late final IamApi _iam = ref.read(iamApiProvider);
 
@@ -65,6 +67,11 @@ class SessionController extends Notifier<SessionState> {
   }
 
   Future<void> signOut() async {
+    try {
+      await ref.read(sessionNotificationCleanupProvider)();
+    } catch (_) {
+      /* Local logout must still complete. */
+    }
     await _storage.clear();
     await _clearPersonalData();
     state = const SessionSignedOut();
@@ -117,9 +124,17 @@ class SessionController extends Notifier<SessionState> {
   }
 
   Future<void> _expire(ApiError error) async {
+    if (_expiring) return;
+    _expiring = true;
+    try {
+      await ref.read(sessionNotificationCleanupProvider)();
+    } catch (_) {
+      /* Rejected credentials must still be removed. */
+    }
     await _storage.clear();
     if (error.isAccountRejected) await _clearPersonalData();
     state = SessionSignedOut(message: error.userMessage);
+    _expiring = false;
   }
 
   String _signInMessage(ApiError e) {

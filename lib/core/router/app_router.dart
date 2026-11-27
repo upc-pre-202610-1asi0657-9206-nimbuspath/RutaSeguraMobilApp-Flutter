@@ -6,6 +6,7 @@ import '../../iam/application/session_controller.dart';
 import '../../iam/presentation/pages/login_page.dart';
 import '../../iam/presentation/pages/splash_page.dart';
 import '../../shell/main_shell.dart';
+import '../../notifications/presentation/notifications_page.dart';
 
 /// Rutas de primer nivel.
 ///
@@ -30,16 +31,21 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       final session = ref.read(sessionControllerProvider);
       final atLogin = state.matchedLocation == AppRoutes.login;
       return switch (session) {
-        SessionRestoring() => AppRoutes.splash == state.matchedLocation
-            ? null
-            : AppRoutes.splash,
+        SessionRestoring() =>
+          AppRoutes.splash == state.matchedLocation ? null : AppRoutes.splash,
         SessionSignedOut() => atLogin ? null : AppRoutes.login,
-        SessionActive() => atLogin || state.matchedLocation == AppRoutes.splash
-            ? AppRoutes.home
-            : null,
+        SessionActive() =>
+          atLogin || state.matchedLocation == AppRoutes.splash
+              ? AppRoutes.home
+              : null,
       };
     },
     routes: [
+      GoRoute(
+        path: '/notifications',
+        builder: (context, state) =>
+            NotificationsPage(initialId: state.extra as String?),
+      ),
       GoRoute(
         path: AppRoutes.splash,
         builder: (context, state) => const SplashPage(),
