@@ -1,5 +1,7 @@
 # Avisos del conductor en Android
 
+> Preparación actual de la caminata, cuentas ya creadas, ruta e inscripción: `E:\rutasegura-backend\docs\PRUEBA-CAMINATA.md`. El APK de caminata añade aviso local de llegada a parada y usa `-SignalRTransport LongPolling` para el Gateway actual de AWS, que no acepta WebSocket Upgrade. Se verificaron conexión y desconexión desde Dart, sin cambiar EC2.
+
 La campana de Inicio/Perfil abre la bandeja autenticada con cinco tipos de aviso:
 
 | Aviso | Qué debe revisar el conductor |
@@ -51,6 +53,6 @@ La recepción en Android contra AWS permanece pendiente. La aceptación del prov
 
 ## Verificación local
 
-146 pruebas Flutter aprobadas, incluidas 10 de Notifications: permisos, rotación, baja online/offline, paginación, aislamiento de sesión, enlaces y render a 390 px. Análisis sin errores ni warnings usando `flutter analyze --no-fatal-infos`; permanecen avisos informativos de APIs/deprecaciones con el SDK nuevo. APK debug compilado contra el Gateway AWS. Falta aceptación en un celular después del despliegue backend.
+154 pruebas Flutter locales aprobadas, incluida cancelación HTTP de SignalR, carrera de handshake y aviso de llegada a parada. Una prueba optativa adicional conecta/desconecta los hubs reales de AWS para PARENT/DRIVER. APK debug compilado contra el Gateway AWS. Falta aceptación con GPS/push reales en un celular. Las deprecaciones informativas del SDK nuevo siguen registradas.
 
 Referencia: [recepción de mensajes Flutter/FCM](https://firebase.google.com/docs/cloud-messaging/flutter/receive-messages).

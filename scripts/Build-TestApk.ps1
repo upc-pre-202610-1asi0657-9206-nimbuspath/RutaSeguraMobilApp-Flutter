@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][uri]$GatewayUrl,
-    [string]$FlutterExecutable = 'flutter'
+    [string]$FlutterExecutable = 'flutter',
+    [ValidateSet('Auto', 'LongPolling')][string]$SignalRTransport = 'Auto'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,7 +22,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Fallo flutter clean.' }
     & $FlutterExecutable pub get
     if ($LASTEXITCODE -ne 0) { throw 'Fallo la restauracion de dependencias.' }
-    & $FlutterExecutable build apk --debug "--dart-define=API_BASE_URL=$($GatewayUrl.GetLeftPart([System.UriPartial]::Authority))"
+    $taskLongPolling = ($SignalRTransport -eq 'LongPolling').ToString().ToLowerInvariant()
+    & $FlutterExecutable build apk --debug "--dart-define=API_BASE_URL=$($GatewayUrl.GetLeftPart([System.UriPartial]::Authority))" "--dart-define=SIGNALR_LONG_POLLING=$taskLongPolling"
     if ($LASTEXITCODE -ne 0) { throw 'Fallo la compilacion Android.' }
 } finally {
     $env:PUB_CACHE = $taskPreviousCache

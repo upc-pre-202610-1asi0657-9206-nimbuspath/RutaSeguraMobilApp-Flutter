@@ -8,6 +8,10 @@ import 'package:flutter/foundation.dart';
 /// Gateway local: `10.0.2.2:8000` desde el emulador Android (alias de la PC)
 /// y `127.0.0.1:8000` en el resto (simulador iOS, web, escritorio).
 abstract final class AppConfig {
+  /// Use the Gateway's HTTP SignalR transport when its reverse proxy blocks WebSocket Upgrade.
+  static const signalRLongPolling = bool.fromEnvironment(
+    'SIGNALR_LONG_POLLING',
+  );
   static const String _apiBaseUrlOverride = String.fromEnvironment(
     'API_BASE_URL',
   );
@@ -27,8 +31,8 @@ abstract final class AppConfig {
 
   static String get _localGatewayUrl =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android
-          ? 'http://10.0.2.2:8000'
-          : 'http://127.0.0.1:8000';
+      ? 'http://10.0.2.2:8000'
+      : 'http://127.0.0.1:8000';
 
   /// Prefijo común de la API REST.
   static const String apiPrefix = '/api/v1';

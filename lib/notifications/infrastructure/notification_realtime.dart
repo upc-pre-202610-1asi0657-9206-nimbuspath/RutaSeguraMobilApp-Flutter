@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:signalr_netcore/signalr_client.dart';
 
 import '../../core/config/app_config.dart';
+import '../../core/network/signalr_http_client.dart';
 import '../../core/storage/token_storage.dart';
 
 /// Hints only. The authorized REST inbox is always the source of the content.
@@ -14,16 +15,21 @@ Stream<void> watchNotificationHints(
   final stream = StreamController<void>();
   final stop = Completer<void>();
   HubConnection? connection;
+  CancellableSignalRHttpClient? http;
   Future<void> run() async {
     while (!stop.isCompleted) {
       final closed = Completer<void>();
+      final client = http = CancellableSignalRHttpClient();
       try {
         final hub = HubConnectionBuilder()
             .withUrl(
               url,
               options: HttpConnectionOptions(
-                transport: HttpTransportType.WebSockets,
-                skipNegotiation: true,
+                httpClient: client,
+                requestTimeout: 15000,
+                transport: AppConfig.signalRLongPolling
+                    ? HttpTransportType.LongPolling
+                    : null,
                 accessTokenFactory: () async => await token() ?? '',
               ),
             )
@@ -46,6 +52,7 @@ Stream<void> watchNotificationHints(
           await connection?.stop();
         } catch (_) {}
         connection = null;
+        client.close();
       }
       if (!stop.isCompleted)
         await Future.any([
@@ -61,6 +68,7 @@ Stream<void> watchNotificationHints(
     try {
       await connection?.stop();
     } catch (_) {}
+    http?.close();
   };
   return stream.stream;
 }

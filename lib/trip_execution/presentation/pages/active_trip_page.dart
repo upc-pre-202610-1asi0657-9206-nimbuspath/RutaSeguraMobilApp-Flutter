@@ -19,6 +19,8 @@ import '../../application/sync_controller.dart';
 import '../../application/sync_service.dart';
 import '../../application/tracking_controller.dart';
 import '../../application/tracking_engine.dart';
+import '../../application/stop_arrival_controller.dart';
+import '../widgets/stop_arrival_banner.dart';
 import '../../application/trip_controller.dart';
 import '../../application/trip_operational_details.dart';
 import '../../domain/model/queued_event.dart';
@@ -357,6 +359,25 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
     final tracking = live.isActive
         ? ref.watch(trackingControllerProvider(live.tripId))
         : const TrackingState(status: TrackingStatus.stopped);
+    final arrival = live.isActive
+        ? ref.watch(stopArrivalProvider(widget.trip))
+        : null;
+    final rosterNames = {
+      for (final student
+          in ref.watch(studentsProvider).value ?? const <RouteStudent>[])
+        student.studentId: student.fullName,
+    };
+    final arrivalNames = arrival == null
+        ? <String>[]
+        : [
+            for (final passenger in live.passengersAt(arrival.stopId))
+              if (passenger.status != PassengerStatus.absent &&
+                  (details?.names[passenger.studentId] ??
+                          rosterNames[passenger.studentId]) !=
+                      null)
+                details?.names[passenger.studentId] ??
+                    rosterNames[passenger.studentId]!,
+          ];
 
     return PopScope(
       canPop: false,
@@ -390,12 +411,30 @@ class _ActiveTripPageState extends ConsumerState<ActiveTripPage>
                         left: 18,
                         right: 18,
                         top: 16,
-                        child: _SharingPill(
-                          tracking: tracking,
-                          pendingEvents: ref
-                              .watch(syncControllerProvider)
-                              .pendingEvents,
-                          serverAgeSeconds: live.position?.ageSeconds,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _SharingPill(
+                              tracking: tracking,
+                              pendingEvents: ref
+                                  .watch(syncControllerProvider)
+                                  .pendingEvents,
+                              serverAgeSeconds: live.position?.ageSeconds,
+                            ),
+                            if (arrival != null) ...[
+                              const SizedBox(height: 10),
+                              StopArrivalBanner(
+                                stopName: arrival.name,
+                                studentNames: arrivalNames,
+                                onDismiss: () => ref
+                                    .read(
+                                      stopArrivalProvider(widget.trip).notifier,
+                                    )
+                                    .dismiss(),
+                                onStudents: _openBoarding,
+                              ),
+                            ],
+                          ],
                         ),
                       ),
                       Align(

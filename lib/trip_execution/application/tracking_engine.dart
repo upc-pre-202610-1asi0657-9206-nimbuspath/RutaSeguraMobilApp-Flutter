@@ -23,6 +23,7 @@ class TrackingState {
     this.lastSentAt,
     this.pending = 0,
     this.sent = 0,
+    this.lastReading,
   });
 
   final TrackingStatus status;
@@ -34,6 +35,9 @@ class TrackingState {
   final int pending;
   final int sent;
 
+  /// Last locally accepted point, for advisory UI only. It does not confirm a boarding or a stop.
+  final GpsReading? lastReading;
+
   bool get isRunning =>
       status == TrackingStatus.starting || status == TrackingStatus.active;
 
@@ -42,13 +46,14 @@ class TrackingState {
     DateTime? lastSentAt,
     int? pending,
     int? sent,
-  }) =>
-      TrackingState(
-        status: status ?? this.status,
-        lastSentAt: lastSentAt ?? this.lastSentAt,
-        pending: pending ?? this.pending,
-        sent: sent ?? this.sent,
-      );
+    GpsReading? lastReading,
+  }) => TrackingState(
+    status: status ?? this.status,
+    lastSentAt: lastSentAt ?? this.lastSentAt,
+    pending: pending ?? this.pending,
+    sent: sent ?? this.sent,
+    lastReading: lastReading ?? this.lastReading,
+  );
 }
 
 /// Recoge lecturas del GPS, descarta las ruidosas y las guarda; cada
@@ -95,22 +100,32 @@ class TrackingEngine {
     final permission = await source.ensurePermission();
     if (_stopped) return;
     if (permission != TrackingPermission.granted) {
-      _emit(_state.copyWith(
-        status: permission == TrackingPermission.denied
-            ? TrackingStatus.noPermission
-            : TrackingStatus.serviceOff,
-      ));
+      _emit(
+        _state.copyWith(
+          status: permission == TrackingPermission.denied
+              ? TrackingStatus.noPermission
+              : TrackingStatus.serviceOff,
+        ),
+      );
       return;
     }
     _sub = source.readings().listen(_onReading, onError: (_) {});
     _timer = Timer.periodic(flushEvery, (_) => flush());
-    _emit(_state.copyWith(status: TrackingStatus.active, pending: sync.state.pendingReadings));
+    _emit(
+      _state.copyWith(
+        status: TrackingStatus.active,
+        pending: sync.state.pendingReadings,
+      ),
+    );
   }
 
   Future<void> _onReading(GpsReading r) async {
     if (_stopped || !r.isUsable(_now())) return;
     await sync.addReading(tripId, r);
-    if (!_stopped) _emit(_state.copyWith(pending: sync.state.pendingReadings));
+    if (!_stopped)
+      _emit(
+        _state.copyWith(pending: sync.state.pendingReadings, lastReading: r),
+      );
   }
 
   /// Envía lo guardado (también lo llama quien necesita vaciar el GPS).
@@ -122,7 +137,12 @@ class TrackingEngine {
       case GpsFlushResult.tripNotActive:
         await stop();
       case GpsFlushResult.sent:
-        _emit(_state.copyWith(lastSentAt: _now(), pending: sync.state.pendingReadings));
+        _emit(
+          _state.copyWith(
+            lastSentAt: _now(),
+            pending: sync.state.pendingReadings,
+          ),
+        );
       case GpsFlushResult.nothing:
       case GpsFlushResult.offline:
       case GpsFlushResult.rateLimited:

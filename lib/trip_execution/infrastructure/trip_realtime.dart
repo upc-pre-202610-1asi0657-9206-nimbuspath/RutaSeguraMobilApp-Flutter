@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:signalr_netcore/signalr_client.dart';
 
 import '../../core/config/app_config.dart';
+import '../../core/network/signalr_http_client.dart';
 import '../../core/storage/token_storage.dart';
 
 /// Lo que llega del canal en tiempo real de un viaje.
@@ -80,13 +81,19 @@ class SignalRTripRealtime implements TripRealtime {
     final controller = StreamController<RealtimeEvent>();
     final stop = Completer<void>();
     HubConnection? hub;
+    CancellableSignalRHttpClient? http;
 
     Future<void> close() async {
       final h = hub;
+      final client = http;
       hub = null;
+      http = null;
       try {
         await h?.stop();
-      } catch (_) {}
+      } catch (_) {
+      } finally {
+        client?.close();
+      }
     }
 
     Future<void> run() async {
@@ -94,14 +101,17 @@ class SignalRTripRealtime implements TripRealtime {
       while (!stop.isCompleted) {
         final dropped = Completer<void>();
         try {
-          final h = hub = _build();
+          final client = http = CancellableSignalRHttpClient();
+          final h = hub = _build(client);
           h.on('TripStatusChanged', (args) {
             final e = RealtimeStatusChanged.tryParse(args);
             if (e != null && !controller.isClosed) controller.add(e);
           });
           h.on('PositionUpdated', (args) {
             final body = args?.firstOrNull;
-            if (body is Map && body['tripId'] == tripId && !controller.isClosed) {
+            if (body is Map &&
+                body['tripId'] == tripId &&
+                !controller.isClosed) {
               controller.add(const RealtimePositionChanged());
             }
           });
@@ -120,7 +130,10 @@ class SignalRTripRealtime implements TripRealtime {
           await close();
         }
         if (stop.isCompleted) break;
-        final wait = retryDelays[attempt < retryDelays.length ? attempt : retryDelays.length - 1];
+        final wait =
+            retryDelays[attempt < retryDelays.length
+                ? attempt
+                : retryDelays.length - 1];
         attempt++;
         await Future.any([Future<void>.delayed(wait), stop.future]);
       }
@@ -134,17 +147,21 @@ class SignalRTripRealtime implements TripRealtime {
     return controller.stream;
   }
 
-  HubConnection _build() => HubConnectionBuilder()
-      .withUrl(
-        hubUrl,
-        options: HttpConnectionOptions(
-          // El Gateway reenvía el WebSocket tal cual: se evita la negociación.
-          transport: HttpTransportType.WebSockets,
-          skipNegotiation: true,
-          accessTokenFactory: () async => await readToken() ?? '',
-        ),
-      )
-      .build();
+  HubConnection _build(CancellableSignalRHttpClient client) =>
+      HubConnectionBuilder()
+          .withUrl(
+            hubUrl,
+            options: HttpConnectionOptions(
+              httpClient: client,
+              // Negotiate so the same Gateway can fall back to Long Polling when a proxy blocks Upgrade.
+              requestTimeout: 15000,
+              transport: AppConfig.signalRLongPolling
+                  ? HttpTransportType.LongPolling
+                  : null,
+              accessTokenFactory: () async => await readToken() ?? '',
+            ),
+          )
+          .build();
 }
 
 final tripRealtimeProvider = Provider<TripRealtime>((ref) {

@@ -1,5 +1,7 @@
 # RutaSegura · App del Conductor
 
+> Prueba de caminata preparada con cuentas sintéticas en AWS: `E:\rutasegura-backend\docs\PRUEBA-CAMINATA.md`. APK en Descargas/RutaSegura-Caminata. Incluye aviso GPS local de llegada a parada; conserva Confirmar parada y las marcaciones manuales. Para compilar contra el Gateway actual, usar `scripts/Build-TestApk.ps1` con `-SignalRTransport LongPolling`.
+
 App móvil (Flutter, iOS y Android) **solo para conductores**. Se conecta al backend
 [`rutasegura-backend`](https://github.com/upc-pre-202610-1asi0657-9206-nimbuspath/rutasegura-backend)
 (rama `develop`) **únicamente a través del API Gateway**. El contrato está en
